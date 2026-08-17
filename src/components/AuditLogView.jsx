@@ -3,16 +3,14 @@ import { useConsent } from '../context/ConsentContext';
 import { History, ShieldCheck, FileText, CheckCircle2, XCircle, AlertTriangle, Lock } from 'lucide-react';
 
 export const AuditLogView = () => {
-  const { auditLogs, dataPrincipal } = useConsent();
+  const { auditLogs, dataPrincipal, t } = useConsent();
 
   return (
     <div className="audit-log-container">
       <div className="page-banner">
         <div className="banner-content">
-          <h1>DPDP Compliance Audit Registry</h1>
-          <p>
-            Immutable chronological log of all consent state transitions, revocations, and grievance filings recorded for Data Principal <strong>{dataPrincipal.name}</strong>.
-          </p>
+          <h1>{t('auditTrailTitle')}</h1>
+          <p>{t('auditTrailSub')}</p>
         </div>
 
         <div style={{ background: 'rgba(99, 102, 241, 0.1)', border: '1px solid var(--border-highlight)', padding: '12px 20px', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -28,13 +26,13 @@ export const AuditLogView = () => {
         <table className="custom-table">
           <thead>
             <tr>
-              <th>Timestamp</th>
-              <th>Action Type</th>
-              <th>Data Fiduciary</th>
+              <th>{t('timestampHeader')}</th>
+              <th>{t('actionHeader')}</th>
+              <th>{t('fiduciaryHeader')}</th>
               <th>Consent ID</th>
-              <th>Event Details</th>
-              <th>IP Address</th>
-              <th>Audit Status</th>
+              <th>{t('detailsHeader')}</th>
+              <th>{t('ipAddressHeader')}</th>
+              <th>{t('statusHeader')}</th>
             </tr>
           </thead>
           <tbody>

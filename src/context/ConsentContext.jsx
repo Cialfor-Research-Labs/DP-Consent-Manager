@@ -5,6 +5,7 @@ import {
   INITIAL_ACTIVE_CONSENTS, 
   INITIAL_AUDIT_LOGS 
 } from '../mock/initialData';
+import { INDIC_LANGUAGES, getTranslation } from '../i18n/translations';
 
 const ConsentContext = createContext();
 
@@ -13,6 +14,18 @@ export const ConsentProvider = ({ children }) => {
   const [scenarios] = useState(MOCK_SCENARIOS);
   const [activeScenarioId, setActiveScenarioId] = useState(MOCK_SCENARIOS[0].id);
   const [activeTab, setActiveTab] = useState('incoming'); // 'incoming', 'email-sim', 'active', 'audit'
+
+  // Language State for DPDP Act Section 5(3) Multilingual Support
+  const [language, setLanguageState] = useState(() => {
+    return localStorage.getItem('dp_lang') || 'en';
+  });
+
+  const setLanguage = (langCode) => {
+    setLanguageState(langCode);
+    localStorage.setItem('dp_lang', langCode);
+  };
+
+  const t = (key) => getTranslation(language, key);
 
   // Selected attributes map for the active scenario: { attr_id: boolean }
   const [selectedAttributes, setSelectedAttributes] = useState({});
@@ -221,6 +234,10 @@ export const ConsentProvider = ({ children }) => {
 
   return (
     <ConsentContext.Provider value={{
+      language,
+      setLanguage,
+      t,
+      INDIC_LANGUAGES,
       dataPrincipal,
       scenarios,
       activeScenarioId,

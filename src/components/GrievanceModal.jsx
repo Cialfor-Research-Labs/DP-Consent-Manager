@@ -3,7 +3,7 @@ import { useConsent } from '../context/ConsentContext';
 import { HelpCircle, Send, ShieldAlert } from 'lucide-react';
 
 export const GrievanceModal = () => {
-  const { grievanceModalOpen, setGrievanceModalOpen, grievanceTarget, submitGrievance } = useConsent();
+  const { grievanceModalOpen, setGrievanceModalOpen, grievanceTarget, submitGrievance, t } = useConsent();
 
   const [type, setType] = useState('UNAUTHORIZED_PROCESSING');
   const [description, setDescription] = useState('');
@@ -29,7 +29,7 @@ export const GrievanceModal = () => {
       <div className="modal-card">
         <div className="modal-header">
           <div className="modal-title" style={{ color: '#818cf8' }}>
-            <HelpCircle size={24} /> File Grievance to Data Protection Officer (DPO)
+            <HelpCircle size={24} /> {t('grievanceModalTitle')}
           </div>
           <button className="close-btn" onClick={() => setGrievanceModalOpen(false)}>✕</button>
         </div>
@@ -43,7 +43,7 @@ export const GrievanceModal = () => {
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
-              Grievance Category (DPDP Act Rights):
+              {t('grievanceTypeLabel')}:
             </label>
             <select 
               className="btn-secondary"
@@ -61,7 +61,7 @@ export const GrievanceModal = () => {
 
           <div style={{ marginBottom: '24px' }}>
             <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
-              Detailed Complaint / Request Description:
+              {t('descriptionLabel')}:
             </label>
             <textarea 
               className="btn-secondary"
@@ -75,11 +75,11 @@ export const GrievanceModal = () => {
 
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setGrievanceModalOpen(false)}>
-              Cancel
+              {t('closeBtn')}
             </button>
             <button type="submit" className="btn btn-primary">
               <Send size={16} />
-              Submit Grievance Ticket
+              {t('submitGrievanceBtn')}
             </button>
           </div>
         </form>

@@ -14,7 +14,8 @@ export const ActiveConsentsView = () => {
     activeConsents, 
     revokeConsent, 
     setGrievanceTarget, 
-    setGrievanceModalOpen 
+    setGrievanceModalOpen,
+    t 
   } = useConsent();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -47,15 +48,13 @@ export const ActiveConsentsView = () => {
       {/* Banner */}
       <div className="page-banner">
         <div className="banner-content">
-          <h1>Active Consents & Permission Control</h1>
-          <p>
-            Review all active data processing consents given to Data Fiduciaries. Under DPDP Act 2023, you retain the statutory right to revoke any consent anytime.
-          </p>
+          <h1>{t('activeConsentsTitle')}</h1>
+          <p>{t('activeConsentsSub')}</p>
         </div>
 
         <div style={{ display: 'flex', gap: '16px' }}>
           <div style={{ background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '14px 24px', borderRadius: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: '0.76rem', color: '#34d399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Active Consents</div>
+            <div style={{ fontSize: '0.76rem', color: '#34d399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('navActiveConsents')}</div>
             <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#ffffff', marginTop: '2px' }}>{activeCount}</div>
           </div>
 
@@ -150,7 +149,7 @@ export const ActiveConsentsView = () => {
                 {/* Granted Attributes Tags */}
                 <div style={{ marginBottom: '20px' }}>
                   <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-                    Granted Attributes ({consent.grantedAttributes.length}):
+                    {t('grantedAttrs')} ({consent.grantedAttributes.length}):
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                     {consent.grantedAttributes.map((attr, idx) => (
@@ -163,7 +162,7 @@ export const ActiveConsentsView = () => {
 
                 {/* Metadata Row */}
                 <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border-color)' }}>
-                  <span>Granted: {new Date(consent.grantedOn).toLocaleDateString()}</span>
+                  <span>{t('grantedOn')}: {new Date(consent.grantedOn).toLocaleDateString()}</span>
                   <span>Consent ID: <code style={{ color: '#60a5fa' }}>{consent.consentId}</code></span>
                 </div>
               </div>
@@ -177,7 +176,7 @@ export const ActiveConsentsView = () => {
                     onClick={() => setRevokingConsentId(consent.consentId)}
                   >
                     <XCircle size={15} />
-                    Revoke Consent
+                    {t('revokeBtn')}
                   </button>
                 ) : (
                   <div style={{ flex: 1, fontSize: '0.85rem', color: '#f87171', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -195,7 +194,7 @@ export const ActiveConsentsView = () => {
                   }}
                 >
                   <HelpCircle size={15} />
-                  DPO Grievance
+                  {t('fileGrievanceBtn')}
                 </button>
               </div>
             </div>

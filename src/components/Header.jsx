@@ -1,6 +1,6 @@
 import React from 'react';
 import { useConsent } from '../context/ConsentContext';
-import { ShieldCheck, Mail, CheckCircle2, History, RotateCcw } from 'lucide-react';
+import { ShieldCheck, Mail, CheckCircle2, History, RotateCcw, Languages } from 'lucide-react';
 
 export const Header = () => {
   const { 
@@ -8,7 +8,11 @@ export const Header = () => {
     activeTab, 
     setActiveTab, 
     activeConsents, 
-    resetToDefaults 
+    resetToDefaults,
+    language,
+    setLanguage,
+    INDIC_LANGUAGES,
+    t
   } = useConsent();
 
   const activeCount = activeConsents.filter(c => c.status === 'ACTIVE').length;
@@ -20,8 +24,8 @@ export const Header = () => {
           <ShieldCheck size={26} />
         </div>
         <div>
-          <div className="brand-title">Data Principal Consent Manager</div>
-          <div className="brand-subtitle">DPDP Act 2023 Compliant • Individual Privacy Control</div>
+          <div className="brand-title">{t('portalTitle')}</div>
+          <div className="brand-subtitle">{t('portalSubtitle')}</div>
         </div>
       </div>
 
@@ -31,7 +35,7 @@ export const Header = () => {
           onClick={() => setActiveTab('email-sim')}
         >
           <Mail size={16} />
-          Incoming Request
+          {t('navIncoming')}
         </button>
 
         <button 
@@ -39,7 +43,7 @@ export const Header = () => {
           onClick={() => setActiveTab('incoming')}
         >
           <ShieldCheck size={16} />
-          Decision Hub
+          {t('navDecisionHub')}
         </button>
 
         <button 
@@ -47,7 +51,7 @@ export const Header = () => {
           onClick={() => setActiveTab('active')}
         >
           <CheckCircle2 size={16} />
-          Active Consents ({activeCount})
+          {t('navActiveConsents')} ({activeCount})
         </button>
 
         <button 
@@ -55,11 +59,37 @@ export const Header = () => {
           onClick={() => setActiveTab('audit')}
         >
           <History size={16} />
-          Audit Trail
+          {t('navAuditTrail')}
+        </button>
+
+        <button 
+          className={`nav-tab-btn ${activeTab === 'rights' ? 'active' : ''}`}
+          onClick={() => setActiveTab('rights')}
+        >
+          <ShieldCheck size={16} style={{ color: '#34d399' }} />
+          {t('navDataRights')}
         </button>
       </nav>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        {/* Indic Language Selector - DPDP Sec 5(3) Mandate */}
+        <div className="lang-selector-wrapper" title="DPDP Act 2023 Sec 5(3) Mandate: Mandatory access in all 22 8th Schedule Indic Languages">
+          <div className="lang-selector-btn">
+            <Languages size={16} style={{ color: '#a855f7' }} />
+            <select 
+              value={language} 
+              onChange={(e) => setLanguage(e.target.value)}
+              className="lang-select-input"
+            >
+              {INDIC_LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  {lang.nativeName} ({lang.name})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="user-profile-badge">
           <div className="user-avatar">
             {dataPrincipal.name.charAt(0)}
@@ -77,7 +107,7 @@ export const Header = () => {
           style={{ gap: '6px' }}
         >
           <RotateCcw size={14} />
-          Reset Demo
+          {t('resetDemo')}
         </button>
       </div>
     </header>

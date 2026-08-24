@@ -3,8 +3,11 @@ import {
   CURRENT_DATA_PRINCIPAL, 
   MOCK_SCENARIOS, 
   INITIAL_ACTIVE_CONSENTS, 
-  INITIAL_AUDIT_LOGS 
+  INITIAL_AUDIT_LOGS,
+  INITIAL_NOMINEE,
+  INITIAL_DSR_REQUESTS
 } from '../mock/initialData';
+import { INDIC_LANGUAGES, getTranslation } from '../i18n/translations';
 
 const ConsentContext = createContext();
 
@@ -12,7 +15,19 @@ export const ConsentProvider = ({ children }) => {
   const [dataPrincipal] = useState(CURRENT_DATA_PRINCIPAL);
   const [scenarios] = useState(MOCK_SCENARIOS);
   const [activeScenarioId, setActiveScenarioId] = useState(MOCK_SCENARIOS[0].id);
-  const [activeTab, setActiveTab] = useState('incoming'); // 'incoming', 'email-sim', 'active', 'audit'
+  const [activeTab, setActiveTab] = useState('incoming'); // 'incoming', 'email-sim', 'active', 'audit', 'rights'
+
+  // Language State for DPDP Act Section 5(3) Multilingual Support
+  const [language, setLanguageState] = useState(() => {
+    return localStorage.getItem('dp_lang') || 'en';
+  });
+
+  const setLanguage = (langCode) => {
+    setLanguageState(langCode);
+    localStorage.setItem('dp_lang', langCode);
+  };
+
+  const t = (key) => getTranslation(language, key);
 
   // Selected attributes map for the active scenario: { attr_id: boolean }
   const [selectedAttributes, setSelectedAttributes] = useState({});
@@ -28,6 +43,20 @@ export const ConsentProvider = ({ children }) => {
     const saved = localStorage.getItem('dp_audit_logs');
     return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
   });
+
+  // Nominee state (Section 14)
+  const [nominee, setNomineeState] = useState(() => {
+    const saved = localStorage.getItem('dp_nominee');
+    return saved ? JSON.parse(saved) : INITIAL_NOMINEE;
+  });
+
+  // DSR Requests List (Sections 11-14)
+  const [dsrRequests, setDsrRequests] = useState(() => {
+    const saved = localStorage.getItem('dp_dsr_requests');
+    return saved ? JSON.parse(saved) : INITIAL_DSR_REQUESTS;
+  });
+
+  const [nominationModalOpen, setNominationModalOpen] = useState(false);
 
   // Current signed consent receipt artifact (for modal display)
   const [latestReceipt, setLatestReceipt] = useState(null);
@@ -47,6 +76,14 @@ export const ConsentProvider = ({ children }) => {
   useEffect(() => {
     localStorage.setItem('dp_audit_logs', JSON.stringify(auditLogs));
   }, [auditLogs]);
+
+  useEffect(() => {
+    localStorage.setItem('dp_nominee', JSON.stringify(nominee));
+  }, [nominee]);
+
+  useEffect(() => {
+    localStorage.setItem('dp_dsr_requests', JSON.stringify(dsrRequests));
+  }, [dsrRequests]);
 
   // Current scenario object
   const currentScenario = scenarios.find(s => s.id === activeScenarioId) || scenarios[0];
@@ -211,16 +248,116 @@ export const ConsentProvider = ({ children }) => {
     showToast(`Grievance submitted to DPO (${grievanceData.dpoEmail}). Ticket ID: GRV-2026-${Math.floor(1000 + Math.random() * 9000)}.`);
   };
 
+  // Action: Update Statutory Nominee (Section 14)
+  const updateNominee = (updatedNomineeData) => {
+    const newNominee = {
+      ...updatedNomineeData,
+      dateDesignated: new Date().toISOString().split('T')[0],
+      status: "ACTIVE_VERIFIED"
+    };
+    setNomineeState(newNominee);
+
+    const auditEntry = {
+      id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
+      timestamp: new Date().toISOString(),
+      action: "NOMINEE_UPDATED",
+      fiduciary: "Central Privacy Registry",
+      consentId: "N/A",
+      details: `Updated designated nominee to ${newNominee.nomineeName} (${newNominee.relationship}).`,
+      ipAddress: "103.21.124.88",
+      status: "SUCCESS"
+    };
+    setAuditLogs(prev => [auditEntry, ...prev]);
+    setNominationModalOpen(false);
+    showToast(`Statutory Nominee updated to ${newNominee.nomineeName} (DPDP Sec 14).`);
+  };
+
+  // Action: Submit Right to Erasure / Data Deletion Request (Section 12)
+  const submitErasureRequest = (erasureData) => {
+    const ticketId = `DSR-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
+    const slaDeadline = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const newRequest = {
+      ticketId,
+      type: "RIGHT_TO_ERASURE",
+      fiduciary: erasureData.fiduciary,
+      consentId: erasureData.consentId || "N/A",
+      details: erasureData.details || "Complete data erasure requested under DPDP Act Section 12.",
+      submittedOn: now,
+      status: "PROCESSING",
+      slaDeadline,
+      completionHash: "PENDING"
+    };
+
+    setDsrRequests(prev => [newRequest, ...prev]);
+
+    const auditEntry = {
+      id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
+      timestamp: now,
+      action: "ERASURE_REQUESTED",
+      fiduciary: erasureData.fiduciary,
+      consentId: erasureData.consentId || "N/A",
+      details: `Submitted Right to Erasure request under DPDP Act Sec 12. Ticket: ${ticketId}`,
+      ipAddress: "103.21.124.88",
+      status: "PROCESSING"
+    };
+    setAuditLogs(prev => [auditEntry, ...prev]);
+    showToast(`Erasure Request submitted to ${erasureData.fiduciary}. Ticket ID: ${ticketId}.`);
+  };
+
+  // Action: Submit Right to Data Correction Request (Section 11)
+  const submitCorrectionRequest = (correctionData) => {
+    const ticketId = `DSR-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
+    const slaDeadline = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const newRequest = {
+      ticketId,
+      type: "RIGHT_TO_CORRECTION",
+      fiduciary: correctionData.fiduciary,
+      consentId: "N/A",
+      details: `Field: ${correctionData.fieldName}. Updated Value: ${correctionData.newValue}. Reason: ${correctionData.reason}`,
+      submittedOn: now,
+      status: "PROCESSING",
+      slaDeadline,
+      completionHash: "PENDING"
+    };
+
+    setDsrRequests(prev => [newRequest, ...prev]);
+
+    const auditEntry = {
+      id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
+      timestamp: now,
+      action: "CORRECTION_REQUESTED",
+      fiduciary: correctionData.fiduciary,
+      consentId: "N/A",
+      details: `Data Correction request for ${correctionData.fieldName}. Ticket: ${ticketId}`,
+      ipAddress: "103.21.124.88",
+      status: "PROCESSING"
+    };
+    setAuditLogs(prev => [auditEntry, ...prev]);
+    showToast(`Data Correction Request submitted to ${correctionData.fiduciary}. Ticket ID: ${ticketId}.`);
+  };
+
   const resetToDefaults = () => {
     setActiveConsents(INITIAL_ACTIVE_CONSENTS);
     setAuditLogs(INITIAL_AUDIT_LOGS);
+    setNomineeState(INITIAL_NOMINEE);
+    setDsrRequests(INITIAL_DSR_REQUESTS);
     localStorage.removeItem('dp_active_consents');
     localStorage.removeItem('dp_audit_logs');
+    localStorage.removeItem('dp_nominee');
+    localStorage.removeItem('dp_dsr_requests');
     showToast("Reset consent manager to demo default records.", "info");
   };
 
   return (
     <ConsentContext.Provider value={{
+      language,
+      setLanguage,
+      t,
+      INDIC_LANGUAGES,
       dataPrincipal,
       scenarios,
       activeScenarioId,
@@ -235,6 +372,13 @@ export const ConsentProvider = ({ children }) => {
       revokeConsent,
       activeConsents,
       auditLogs,
+      nominee,
+      updateNominee,
+      dsrRequests,
+      submitErasureRequest,
+      submitCorrectionRequest,
+      nominationModalOpen,
+      setNominationModalOpen,
       latestReceipt,
       setLatestReceipt,
       grievanceModalOpen,

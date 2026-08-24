@@ -226,6 +226,47 @@ body {
   border-radius: 999px;
 }
 
+/* Indic Language Selector - DPDP Act Sec 5(3) Mandate */
+.lang-selector-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+.lang-selector-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(168, 85, 247, 0.12);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  padding: 5px 14px;
+  border-radius: 999px;
+  transition: all 0.2s ease;
+}
+
+.lang-selector-btn:hover {
+  background: rgba(168, 85, 247, 0.2);
+  border-color: rgba(168, 85, 247, 0.5);
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.25);
+}
+
+.lang-select-input {
+  background: transparent;
+  border: none;
+  color: #e9d5ff;
+  font-family: var(--font-main);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+
+.lang-select-input option {
+  background: #111827;
+  color: #f8fafc;
+  font-weight: 500;
+  padding: 8px;
+}
+
 .user-avatar {
   width: 34px;
   height: 34px;

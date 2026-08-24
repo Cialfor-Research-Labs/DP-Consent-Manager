@@ -3,7 +3,7 @@ import { useConsent } from '../context/ConsentContext';
 import { ShieldCheck, Download, ExternalLink, CheckCircle2, Copy } from 'lucide-react';
 
 export const ConsentReceiptModal = () => {
-  const { latestReceipt, setLatestReceipt, setActiveTab } = useConsent();
+  const { latestReceipt, setLatestReceipt, setActiveTab, t } = useConsent();
 
   if (!latestReceipt) return null;
 
@@ -22,14 +22,14 @@ export const ConsentReceiptModal = () => {
       <div className="modal-card" style={{ maxWidth: '640px' }}>
         <div className="modal-header">
           <div className="modal-title" style={{ color: '#34d399' }}>
-            <ShieldCheck size={26} /> Digital Consent Receipt Generated
+            <ShieldCheck size={26} /> {t('receiptModalTitle')}
           </div>
           <button className="close-btn" onClick={() => setLatestReceipt(null)}>✕</button>
         </div>
 
         <div style={{ textAlign: 'center', marginBottom: '20px' }}>
           <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-            Your consent preferences have been cryptographically signed and stored in the DPDP Audit Registry.
+            {t('receiptModalSub')}
           </div>
         </div>
 
@@ -57,7 +57,7 @@ export const ConsentReceiptModal = () => {
           </div>
 
           <div className="receipt-row">
-            <span className="receipt-key">Granted Attributes ({latestReceipt.grantedAttributes.length}):</span>
+            <span className="receipt-key">{t('grantedAttrs')} ({latestReceipt.grantedAttributes.length}):</span>
             <span className="receipt-val" style={{ color: '#34d399' }}>
               {latestReceipt.grantedAttributes.join(', ')}
             </span>
@@ -65,7 +65,7 @@ export const ConsentReceiptModal = () => {
 
           {latestReceipt.deniedAttributes.length > 0 && (
             <div className="receipt-row">
-              <span className="receipt-key">Restricted / Denied:</span>
+              <span className="receipt-key">{t('deniedAttrs')}:</span>
               <span className="receipt-val" style={{ color: '#f87171' }}>
                 {latestReceipt.deniedAttributes.join(', ')}
               </span>
@@ -73,12 +73,12 @@ export const ConsentReceiptModal = () => {
           )}
 
           <div className="receipt-row">
-            <span className="receipt-key">Granted Timestamp:</span>
+            <span className="receipt-key">{t('grantedOn')}:</span>
             <span className="receipt-val">{new Date(latestReceipt.grantedOn).toLocaleString()}</span>
           </div>
 
           <div className="receipt-row">
-            <span className="receipt-key">Validity Period:</span>
+            <span className="receipt-key">{t('expiresOn')}:</span>
             <span className="receipt-val">{new Date(latestReceipt.expiresOn).toLocaleDateString()} (1 Year)</span>
           </div>
 
@@ -96,7 +96,7 @@ export const ConsentReceiptModal = () => {
             onClick={downloadReceiptJSON}
           >
             <Download size={16} />
-            <span>Download Receipt (.json)</span>
+            <span>{t('downloadJsonBtn')}</span>
           </button>
 
           <button 
@@ -107,7 +107,7 @@ export const ConsentReceiptModal = () => {
             }}
           >
             <CheckCircle2 size={16} />
-            <span>View Active Consents Dashboard</span>
+            <span>{t('navActiveConsents')}</span>
           </button>
         </div>
       </div>

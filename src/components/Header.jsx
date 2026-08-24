@@ -61,6 +61,14 @@ export const Header = () => {
           <History size={16} />
           {t('navAuditTrail')}
         </button>
+
+        <button 
+          className={`nav-tab-btn ${activeTab === 'rights' ? 'active' : ''}`}
+          onClick={() => setActiveTab('rights')}
+        >
+          <ShieldCheck size={16} style={{ color: '#34d399' }} />
+          {t('navDataRights')}
+        </button>
       </nav>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>

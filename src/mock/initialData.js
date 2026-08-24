@@ -164,3 +164,39 @@ export const INITIAL_AUDIT_LOGS = [
     status: "REVOKED"
   }
 ];
+
+export const INITIAL_NOMINEE = {
+  nomineeName: "Rajesh Sharma",
+  relationship: "Father / Parent",
+  contactPhone: "+91 98112 34567",
+  contactEmail: "rajesh.sharma@gmail.com",
+  idType: "Aadhaar Card",
+  idNumber: "XXXX-XXXX-4819",
+  dateDesignated: "2025-08-20",
+  status: "ACTIVE_VERIFIED"
+};
+
+export const INITIAL_DSR_REQUESTS = [
+  {
+    ticketId: "DSR-2026-8910",
+    type: "RIGHT_TO_ERASURE",
+    fiduciary: "Third-Party Alumni Feedback Vendor",
+    consentId: "CNST-2025-0012Z",
+    details: "Complete deletion of student feedback logs, contact email, and session metadata following consent revocation.",
+    submittedOn: "2025-08-01T09:15:00Z",
+    status: "COMPLETED",
+    slaDeadline: "2025-08-31",
+    completionHash: "0x7d91...a412"
+  },
+  {
+    ticketId: "DSR-2026-4021",
+    type: "RIGHT_TO_CORRECTION",
+    fiduciary: "Central Training & Placement Cell (CTPC)",
+    consentId: "N/A",
+    details: "Correction of residential address and updated mobile phone number (+91 98765 43210).",
+    submittedOn: "2026-01-15T11:20:00Z",
+    status: "PROCESSING",
+    slaDeadline: "2026-02-14",
+    completionHash: "PENDING"
+  }
+];

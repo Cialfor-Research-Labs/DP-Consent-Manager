@@ -34,9 +34,22 @@ export const UI_TRANSLATIONS = {
     navDecisionHub: "Decision Hub",
     navActiveConsents: "Active Consents",
     navAuditTrail: "Audit Trail",
+    navDataRights: "Data Rights (Sec 11-14)",
     resetDemo: "Reset Demo",
     simulationMode: "SIMULATION MODE: Select Incoming Consent Scenario",
     interactiveTest: "INTERACTIVE TEST",
+    
+    // DSR Portal (Sec 11-14)
+    dsrTitle: "Statutory Data Subject Rights (DSR) Portal",
+    dsrSub: "Exercise your legal rights to Data Erasure (Sec 12), Data Correction (Sec 11), and Nominee Designation (Sec 14) under DPDP Act 2023.",
+    tabErasure: "Right to Erasure (Sec 12)",
+    tabCorrection: "Right to Correction (Sec 11)",
+    tabNomination: "Right to Nominate (Sec 14)",
+    tabDsrTracker: "DSR Request Tracker",
+    erasureWizardTitle: "Data Erasure Request Wizard",
+    correctionFormTitle: "Personal Data Correction Request",
+    nominationTitle: "Designated Statutory Nominee",
+    updateNomineeBtn: "Update Nominee Details",
     
     // Decision Hub
     noticeId: "Notice ID",

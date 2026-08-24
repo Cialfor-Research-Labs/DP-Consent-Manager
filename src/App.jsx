@@ -6,8 +6,10 @@ import { EmailSimulatorView } from './components/EmailSimulatorView';
 import { ConsentDecisionHub } from './components/ConsentDecisionHub';
 import { ActiveConsentsView } from './components/ActiveConsentsView';
 import { AuditLogView } from './components/AuditLogView';
+import { DataRightsView } from './components/DataRightsView';
 import { ConsentReceiptModal } from './components/ConsentReceiptModal';
 import { GrievanceModal } from './components/GrievanceModal';
+import { NominationModal } from './components/NominationModal';
 import './styles/main.css';
 
 const MainAppContent = () => {
@@ -23,10 +25,12 @@ const MainAppContent = () => {
         {activeTab === 'incoming' && <ConsentDecisionHub />}
         {activeTab === 'active' && <ActiveConsentsView />}
         {activeTab === 'audit' && <AuditLogView />}
+        {activeTab === 'rights' && <DataRightsView />}
       </main>
 
       <ConsentReceiptModal />
       <GrievanceModal />
+      <NominationModal />
 
       {toastMessage && (
         <div className="toast-container">

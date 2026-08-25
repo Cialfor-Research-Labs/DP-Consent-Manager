@@ -75,6 +75,14 @@ body {
   backdrop-filter: blur(10px);
   white-space: nowrap;
   overflow-x: auto;
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+.scenario-bar::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+  width: 0;
+  height: 0;
 }
 
 .scenario-title-group {

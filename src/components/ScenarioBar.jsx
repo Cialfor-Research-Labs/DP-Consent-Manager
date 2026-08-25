@@ -1,16 +1,20 @@
 import React from 'react';
 import { useConsent } from '../context/ConsentContext';
-import { Sparkles, ArrowRight } from 'lucide-react';
+import { ShieldCheck, ArrowRight } from 'lucide-react';
 
 export const ScenarioBar = () => {
-  const { scenarios, activeScenarioId, selectScenario } = useConsent();
+  const { scenarios, activeScenarioId, selectScenario, t } = useConsent();
 
   return (
     <div className="scenario-bar">
-      <div className="scenario-title-group">
-        <Sparkles size={18} />
-        <span>SIMULATION MODE: Select Incoming Consent Scenario</span>
-        <span className="scenario-badge">Interactive Test</span>
+      <div className="brand-section">
+        <div className="brand-logo-icon">
+          <ShieldCheck size={22} />
+        </div>
+        <div>
+          <div className="brand-title">{t('portalTitle')}</div>
+          <div className="brand-subtitle">{t('portalSubtitle')}</div>
+        </div>
       </div>
 
       <div className="scenario-pills">

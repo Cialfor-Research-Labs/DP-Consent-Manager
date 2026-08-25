@@ -1,18 +1,29 @@
-export const CURRENT_DATA_PRINCIPAL = {
-  id: "DP-2026-88491",
-  name: "Ananya Sharma",
-  email: "ananya.sharma@delhiuniv.ac.in",
-  phone: "+91 98765 43210",
-  rollNo: "2023-CS-1049",
-  institution: "Delhi Technological University",
-  kycStatus: "Verified",
-  registeredOn: "2025-08-15"
+export const generateDataPrincipalId = (email) => {
+  if (!email) return 'DP-2026-00000';
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) {
+    hash = ((hash << 5) - hash) + email.charCodeAt(i);
+    hash |= 0;
+  }
+  const absHash = Math.abs(hash).toString().padStart(5, '0').slice(-5);
+  return `DP-2026-${absHash}`;
 };
 
 export const MOCK_SCENARIOS = [
   {
     id: "scen-placement-2026",
+    token: "tok_placement_2026_x89a",
     title: "Campus Recruitment & Placement Drive 2026",
+    dataPrincipal: {
+      id: generateDataPrincipalId("ananya.sharma@delhiuniv.ac.in"),
+      name: "Ananya Sharma",
+      email: "ananya.sharma@delhiuniv.ac.in",
+      phone: "+91 98765 43210",
+      rollNo: "2023-CS-1049",
+      institution: "Delhi Technological University",
+      kycStatus: "Verified",
+      registeredOn: "2025-08-15"
+    },
     fiduciary: "Central Training & Placement Cell (CTPC)",
     fiduciaryCategory: "Educational Institution",
     fiduciaryLogo: "🎓",
@@ -33,6 +44,19 @@ export const MOCK_SCENARIOS = [
       { id: "attr_backlogs", name: "Active Backlog / Arrears Status", category: "Academic", required: false, description: "Declaration of pending academic backlog courses", sensitive: true, defaultGranted: false },
       { id: "attr_govt_id", name: "Aadhaar / Government Photo ID Proof", category: "KYC Identity", required: false, description: "Identity verification for company entry pass & background check", sensitive: true, defaultGranted: false }
     ],
+    emailSnapshot: {
+      from: "Central Training & Placement Cell (CTPC) <placements@dtu.ac.in>",
+      to: "Ananya Sharma <ananya.sharma@delhiuniv.ac.in>",
+      subject: "ACTION REQUIRED: Grant Data Consent for Campus Placement Drive 2026",
+      date: "Monday, August 24, 2026",
+      body: `Dear Ananya Sharma,
+
+The Central Training & Placement Cell (CTPC) requires your explicit consent to process your academic records and resume for the upcoming Campus Recruitment Drive 2026.
+
+Under the Digital Personal Data Protection (DPDP) Act, you have full granular control to select which data points you wish to share with partner recruiters.
+
+Please click the button below to review the Privacy Notice and configure your consent choices on the official Data Principal Consent Portal.`
+    },
     emailSubject: "ACTION REQUIRED: Grant Data Consent for Campus Placement Drive 2026",
     emailBody: `Dear Ananya Sharma,
 
@@ -44,7 +68,18 @@ Please click the button below to review the Privacy Notice and configure your co
   },
   {
     id: "scen-scholarship-2026",
+    token: "tok_scholarship_2026_m409",
     title: "National Merit Scholarship & Financial Aid",
+    dataPrincipal: {
+      id: generateDataPrincipalId("priya.nair@delhiuniv.ac.in"),
+      name: "Priya Nair",
+      email: "priya.nair@delhiuniv.ac.in",
+      phone: "+91 98123 45678",
+      rollNo: "2023-EC-3011",
+      institution: "Delhi Technological University",
+      kycStatus: "Verified",
+      registeredOn: "2025-08-20"
+    },
     fiduciary: "Higher Education Scholarship Board (HESB)",
     fiduciaryCategory: "Government Body",
     fiduciaryLogo: "🏛️",
@@ -63,8 +98,19 @@ Please click the button below to review the Privacy Notice and configure your co
       { id: "attr_caste", name: "Category / Disability Certificate (If applicable)", category: "Demographic", required: false, description: "Reservation benefits eligibility verification", sensitive: true, defaultGranted: false },
       { id: "attr_attendance", name: "Semester Attendance Record", category: "Academic", required: false, description: "Minimum 75% attendance proof from HOD", sensitive: false, defaultGranted: true }
     ],
+    emailSnapshot: {
+      from: "Higher Education Scholarship Board (HESB) <nodal-scholarship@gov.in>",
+      to: "Priya Nair <priya.nair@delhiuniv.ac.in>",
+      subject: "Consent Notice: Verification of Records for National Merit Scholarship 2026",
+      date: "Friday, August 21, 2026",
+      body: `Dear Priya Nair,
+
+Your application for the National Merit Scholarship 2026 has passed initial screening. 
+
+To proceed with bank disbursement, the Higher Education Scholarship Board requires your digital consent to verify your financial and academic documents. You can grant or restrict access to specific attributes.`
+    },
     emailSubject: "Consent Notice: Verification of Records for National Merit Scholarship 2026",
-    emailBody: `Dear Ananya Sharma,
+    emailBody: `Dear Priya Nair,
 
 Your application for the National Merit Scholarship 2026 has passed initial screening. 
 
@@ -72,7 +118,18 @@ To proceed with bank disbursement, the Higher Education Scholarship Board requir
   },
   {
     id: "scen-health-2026",
+    token: "tok_health_2026_h112",
     title: "University Health & Immunization Verification",
+    dataPrincipal: {
+      id: generateDataPrincipalId("rahul.verma@delhiuniv.ac.in"),
+      name: "Rahul Verma",
+      email: "rahul.verma@delhiuniv.ac.in",
+      phone: "+91 98112 99887",
+      rollNo: "2023-EE-2014",
+      institution: "Delhi Technological University",
+      kycStatus: "Verified",
+      registeredOn: "2025-09-01"
+    },
     fiduciary: "DTU Campus Wellness Center",
     fiduciaryCategory: "Healthcare Provider",
     fiduciaryLogo: "🏥",
@@ -90,8 +147,17 @@ To proceed with bank disbursement, the Higher Education Scholarship Board requir
       { id: "attr_vaccine", name: "Vaccination Records (COVID/Hepatitis)", category: "Medical", required: false, description: "Immunization history for hostel clearance", sensitive: true, defaultGranted: true },
       { id: "attr_chronic", name: "Pre-existing Medical Condition Declaration", category: "Medical", required: false, description: "Optional health notes for campus clinic doctors", sensitive: true, defaultGranted: false }
     ],
+    emailSnapshot: {
+      from: "DTU Campus Wellness Center <health-wellness@dtu.ac.in>",
+      to: "Rahul Verma <rahul.verma@delhiuniv.ac.in>",
+      subject: "Health Center Notice: Annual Student Wellness & Emergency Contact Consent",
+      date: "Wednesday, August 19, 2026",
+      body: `Dear Rahul Verma,
+
+The Campus Wellness Center is updating emergency response records. Please review the consent notice to allow access to your blood group and emergency contact info.`
+    },
     emailSubject: "Health Center Notice: Annual Student Wellness & Emergency Contact Consent",
-    emailBody: `Dear Ananya,
+    emailBody: `Dear Rahul Verma,
 
 The Campus Wellness Center is updating emergency response records. Please review the consent notice to allow access to your blood group and emergency contact info.`
   }

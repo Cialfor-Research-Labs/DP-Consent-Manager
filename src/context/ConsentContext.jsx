@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { 
-  CURRENT_DATA_PRINCIPAL, 
   MOCK_SCENARIOS, 
   INITIAL_ACTIVE_CONSENTS, 
   INITIAL_AUDIT_LOGS,
@@ -8,14 +7,36 @@ import {
   INITIAL_DSR_REQUESTS
 } from '../mock/initialData';
 import { INDIC_LANGUAGES, getTranslation } from '../i18n/translations';
+import { consentApi } from '../api/consentApi';
 
 const ConsentContext = createContext();
 
 export const ConsentProvider = ({ children }) => {
-  const [dataPrincipal] = useState(CURRENT_DATA_PRINCIPAL);
   const [scenarios] = useState(MOCK_SCENARIOS);
-  const [activeScenarioId, setActiveScenarioId] = useState(MOCK_SCENARIOS[0].id);
+  
+  // Resolve active scenario / consent request dynamically from URL or default
+  const [activeScenarioId, setActiveScenarioId] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const noticeIdParam = params.get('noticeId');
+    const tokenParam = params.get('token');
+    if (noticeIdParam || tokenParam) {
+      const found = MOCK_SCENARIOS.find(s => s.noticeId === noticeIdParam || s.token === tokenParam);
+      if (found) return found.id;
+    }
+    return MOCK_SCENARIOS[0].id;
+  });
+
   const [activeTab, setActiveTab] = useState('incoming'); // 'incoming', 'email-sim', 'active', 'audit', 'rights'
+
+  // Current scenario object (source of truth for fiduciary, purpose & data principal)
+  const currentScenario = scenarios.find(s => s.id === activeScenarioId) || scenarios[0];
+
+  // Dynamic Data Principal derived directly from the active consent request email
+  const dataPrincipal = currentScenario.dataPrincipal || {
+    id: "DP-2026-88491",
+    name: "Ananya Sharma",
+    email: "ananya.sharma@delhiuniv.ac.in"
+  };
 
   // Language State for DPDP Act Section 5(3) Multilingual Support
   const [language, setLanguageState] = useState(() => {
@@ -85,9 +106,6 @@ export const ConsentProvider = ({ children }) => {
     localStorage.setItem('dp_dsr_requests', JSON.stringify(dsrRequests));
   }, [dsrRequests]);
 
-  // Current scenario object
-  const currentScenario = scenarios.find(s => s.id === activeScenarioId) || scenarios[0];
-
   // Reset selected attributes whenever active scenario changes
   useEffect(() => {
     if (currentScenario && currentScenario.attributes) {
@@ -124,7 +142,7 @@ export const ConsentProvider = ({ children }) => {
   };
 
   // Action: Grant Consent
-  const grantCurrentConsent = (customNote = "") => {
+  const grantCurrentConsent = async (customNote = "") => {
     const grantedAttrs = [];
     const deniedAttrs = [];
 
@@ -159,8 +177,17 @@ export const ConsentProvider = ({ children }) => {
       customNote: customNote
     };
 
+    // Dispatch REST API decision payload
+    await consentApi.submitConsentDecision(currentScenario.noticeId, {
+      decision: "GRANTED",
+      selected_attributes: Object.keys(selectedAttributes).filter(k => selectedAttributes[k]),
+      remark: customNote,
+      notice_id: currentScenario.noticeId,
+      consent_id: newConsentId
+    });
+
     // Add to active consents
-    setActiveConsents(prev => [newConsentRecord, ...prev]);
+    setActiveConsents(prev => [newConsentRecord, ...prev.filter(c => c.noticeId !== currentScenario.noticeId)]);
 
     // Add to audit log
     const auditEntry = {
@@ -169,6 +196,7 @@ export const ConsentProvider = ({ children }) => {
       action: "CONSENT_GRANTED",
       fiduciary: currentScenario.fiduciary,
       consentId: newConsentId,
+      noticeId: currentScenario.noticeId,
       details: `Granted ${grantedAttrs.length} data attributes (${grantedAttrs.join(', ')}). Denied: ${deniedAttrs.length ? deniedAttrs.join(', ') : 'None'}.`,
       ipAddress: "103.21.124.88",
       status: "SUCCESS"
@@ -188,14 +216,24 @@ export const ConsentProvider = ({ children }) => {
   };
 
   // Action: Deny Consent
-  const denyCurrentConsent = (reason = "Data Principal declined request") => {
+  const denyCurrentConsent = async (reason = "Data Principal declined request") => {
     const now = new Date().toISOString();
+
+    // Dispatch REST API decision payload
+    await consentApi.submitConsentDecision(currentScenario.noticeId, {
+      decision: "DENIED",
+      selected_attributes: [],
+      remark: reason,
+      notice_id: currentScenario.noticeId
+    });
+
     const auditEntry = {
       id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
       timestamp: now,
       action: "CONSENT_DENIED",
       fiduciary: currentScenario.fiduciary,
       consentId: "N/A",
+      noticeId: currentScenario.noticeId,
       details: `Consent request declined. Reason: ${reason}`,
       ipAddress: "103.21.124.88",
       status: "DENIED"
@@ -205,9 +243,15 @@ export const ConsentProvider = ({ children }) => {
   };
 
   // Action: Revoke Active Consent
-  const revokeConsent = (consentId, reason = "User exercised right to withdraw consent under DPDP Act") => {
+  const revokeConsent = async (consentId, reason = "User exercised right to withdraw consent under DPDP Act") => {
     const consentToRevoke = activeConsents.find(c => c.consentId === consentId);
     if (!consentToRevoke) return;
+
+    // Dispatch REST API revocation payload
+    await consentApi.revokeConsent(consentId, {
+      reason: reason,
+      revoked_at: new Date().toISOString()
+    });
 
     setActiveConsents(prev => prev.map(c => {
       if (c.consentId === consentId) {
@@ -222,6 +266,7 @@ export const ConsentProvider = ({ children }) => {
       action: "CONSENT_REVOKED",
       fiduciary: consentToRevoke.fiduciary,
       consentId: consentId,
+      noticeId: consentToRevoke.noticeId,
       details: `Consent revoked. Reason: ${reason}`,
       ipAddress: "103.21.124.88",
       status: "REVOKED"

@@ -86,7 +86,7 @@ export const Header = () => {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2' }}>
             <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap' }}>{dataPrincipal.name}</span>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{dataPrincipal.id}</span>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{dataPrincipal.email}</span>
           </div>
         </div>
 

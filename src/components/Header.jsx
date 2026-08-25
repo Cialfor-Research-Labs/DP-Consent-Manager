@@ -19,16 +19,6 @@ export const Header = () => {
 
   return (
     <header className="header-nav">
-      <div className="brand-section">
-        <div className="brand-logo-icon">
-          <ShieldCheck size={26} />
-        </div>
-        <div>
-          <div className="brand-title">{t('portalTitle')}</div>
-          <div className="brand-subtitle">{t('portalSubtitle')}</div>
-        </div>
-      </div>
-
       <nav className="nav-tabs">
         <button 
           className={`nav-tab-btn ${activeTab === 'email-sim' ? 'active' : ''}`}

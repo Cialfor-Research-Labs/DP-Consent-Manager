@@ -90,13 +90,13 @@ export const Header = () => {
           </div>
         </div>
 
-        <div className="user-profile-badge">
+        <div className="user-profile-badge" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
           <div className="user-avatar">
             {dataPrincipal.name.charAt(0)}
           </div>
-          <div className="user-info-text">
-            <span className="user-name">{dataPrincipal.name}</span>
-            <span className="user-subtext">{dataPrincipal.id}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2' }}>
+            <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap' }}>{dataPrincipal.name}</span>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{dataPrincipal.id}</span>
           </div>
         </div>
 

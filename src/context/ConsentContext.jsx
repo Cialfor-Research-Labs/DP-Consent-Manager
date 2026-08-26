@@ -14,17 +14,43 @@ const ConsentContext = createContext();
 export const ConsentProvider = ({ children }) => {
   const [scenarios] = useState(MOCK_SCENARIOS);
   
-  // Resolve active scenario / consent request dynamically from URL or default
+  // Resolve active scenario / consent request dynamically from URL (/request/<secure-token> or ?token=...)
   const [activeScenarioId, setActiveScenarioId] = useState(() => {
+    const pathname = window.location.pathname;
+    const pathTokenMatch = pathname.match(/\/request\/([^/]+)/);
+    const pathToken = pathTokenMatch ? pathTokenMatch[1] : null;
+
     const params = new URLSearchParams(window.location.search);
     const noticeIdParam = params.get('noticeId');
-    const tokenParam = params.get('token');
+    const tokenParam = params.get('token') || pathToken;
+
     if (noticeIdParam || tokenParam) {
-      const found = MOCK_SCENARIOS.find(s => s.noticeId === noticeIdParam || s.token === tokenParam);
+      const found = MOCK_SCENARIOS.find(s => s.noticeId === noticeIdParam || s.token === tokenParam || s.id === tokenParam);
       if (found) return found.id;
     }
     return MOCK_SCENARIOS[0].id;
   });
+
+  // Async token resolution effect from backend Python REST API
+  useEffect(() => {
+    const pathname = window.location.pathname;
+    const pathTokenMatch = pathname.match(/\/request\/([^/]+)/);
+    const pathToken = pathTokenMatch ? pathTokenMatch[1] : null;
+
+    const params = new URLSearchParams(window.location.search);
+    const tokenParam = params.get('token') || pathToken;
+
+    if (tokenParam) {
+      consentApi.getConsentRequestByToken(tokenParam).then((res) => {
+        if (res && res.id) {
+          const matchingScenario = MOCK_SCENARIOS.find(s => s.id === res.id || s.token === res.token || s.noticeId === res.notice_id);
+          if (matchingScenario) {
+            setActiveScenarioId(matchingScenario.id);
+          }
+        }
+      });
+    }
+  }, []);
 
   const [activeTab, setActiveTab] = useState('incoming'); // 'incoming', 'email-sim', 'active', 'audit', 'rights'
 

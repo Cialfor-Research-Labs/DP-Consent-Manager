@@ -153,20 +153,27 @@ export const EmailSimulatorView = () => {
           <div className="email-cta-box">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#a5b4fc', fontWeight: 600, fontSize: '0.88rem' }}>
               <Lock size={16} />
-              <span>Embedded Hyperlink: Click below to manage consent for this request</span>
+              <span>Embedded Hyperlink: Click below to manage consent via secure request link</span>
             </div>
 
             <button 
               className="btn btn-primary"
               style={{ padding: '14px 28px', fontSize: '1rem', borderRadius: '12px', gap: '10px' }}
-              onClick={() => setActiveTab('incoming')}
+              onClick={() => {
+                const targetUrl = `/request/${currentScenario.token}`;
+                window.history.pushState({}, '', targetUrl);
+                setActiveTab('incoming');
+              }}
             >
               <span>Click here to manage consent</span>
               <ArrowRight size={18} />
             </button>
 
-            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              Secure Request Token: <code style={{ color: '#c084fc', background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: '4px' }}>{currentScenario.token || 'tok_sec_2026'}</code>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+              <span>Secure Request Link:</span>
+              <code style={{ color: '#c084fc', background: 'rgba(0,0,0,0.3)', padding: '2px 8px', borderRadius: '4px', fontFamily: 'var(--font-mono)' }}>
+                {window.location.origin}/request/{currentScenario.token}
+              </code>
             </div>
           </div>
         </div>

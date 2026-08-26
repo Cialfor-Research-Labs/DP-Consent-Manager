@@ -24,6 +24,22 @@ export const consentApi = {
   },
 
   /**
+   * Fetch consent request by path token or ID
+   * GET /api/consent-requests/{requestToken}
+   */
+  async getConsentRequestByToken(requestToken) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/consent-requests/${encodeURIComponent(requestToken)}`);
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e) {
+      console.warn('Backend API token resolution offline, using local scenario fallback:', e.message);
+    }
+    return null;
+  },
+
+  /**
    * Submit Grant or Deny decision to the backend
    * POST /api/consent-requests/{requestId}/decision
    */

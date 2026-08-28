@@ -971,3 +971,8 @@ input:disabled + .slider {
   font-weight: 600;
   font-size: 0.92rem;
 }
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}

@@ -2,9 +2,13 @@ import sqlite3
 import json
 import hashlib
 import os
+import secrets
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "consent_manager.db")
+
+def generate_unpredictable_token() -> str:
+    return f"tok_sec_{secrets.token_urlsafe(32)}"
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)

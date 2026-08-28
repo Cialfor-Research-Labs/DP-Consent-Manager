@@ -5,16 +5,16 @@ from typing import Optional
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
-from database import get_db, init_db, generate_sha256_signature, generate_data_principal_id
+from database import get_db, init_db, generate_sha256_signature, generate_data_principal_id, generate_unpredictable_token
 from models import DecisionPayload, RevokePayload, DSRRequestPayload, ConsentRequestCreatePayload
 
 # Initialize database tables and seed records
 init_db()
 
 app = FastAPI(
-    title="Data Principal Consent Manager - Python Backend",
-    description="DPDP Act 2023 Compliant Python FastAPI REST API Backend",
-    version="1.0.0"
+    title="Data Principal Consent Manager - Security-Enforced Backend",
+    description="DPDP Act 2023 Compliant Python FastAPI REST API Backend with Phase 11 Security Safeguards",
+    version="1.1.0"
 )
 
 # Enable CORS for frontend integration
@@ -59,11 +59,44 @@ def hydrate_request(req_row, conn):
 
     return req
 
+def check_request_expiry(req, conn):
+    if not req.get("expires_at"):
+        return False
+    try:
+        exp_str = req["expires_at"].replace("Z", "")
+        exp_dt = datetime.fromisoformat(exp_str)
+        if datetime.utcnow() > exp_dt:
+            # Update status in DB
+            cursor = conn.cursor()
+            cursor.execute("UPDATE consent_requests SET status = 'EXPIRED' WHERE id = ?;", (req["id"],))
+            cursor.execute("""
+            INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                f"AUD-{random.randint(100, 999)}",
+                req["id"],
+                "N/A",
+                req["data_principal_id"],
+                "EXPIRED_LINK_ACCESS_ATTEMPT",
+                req["fiduciary_name"],
+                req["notice_id"],
+                "Attempted access to an expired consent request token.",
+                "103.21.124.88",
+                datetime.utcnow().isoformat() + "Z",
+                "SECURITY_REJECTED"
+            ))
+            conn.commit()
+            return True
+    except Exception as e:
+        print("Expiry parse check error:", e)
+    return False
+
 @app.get("/health")
 def health_check():
     return {
         "status": "HEALTHY",
-        "service": "Python FastAPI DP Consent Manager Backend",
+        "service": "Python FastAPI DP Consent Manager Backend (Security-Enforced)",
+        "security_features": ["cryptographic_tokens", "server_timestamps", "expiry_handling", "duplicate_prevention", "attribute_validation"],
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
@@ -97,9 +130,9 @@ def create_consent_request(payload: ConsentRequestCreatePayload):
         "1.2 MB"
     ))
 
-    # 3. Create ConsentRequest
+    # 3. Create ConsentRequest with Cryptographically Secure Token
     req_id = f"REQ-2026-CR-{random.randint(100, 999)}"
-    token = f"tok_{random.randint(100000, 999999)}_sec"
+    token = generate_unpredictable_token()
     notice_id = payload.notice_id or f"NTC-2026-CR-{random.randint(100, 999)}"
     now = datetime.utcnow().isoformat() + "Z"
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
@@ -147,6 +180,13 @@ def resolve_consent_request(token: str = Query(..., description="Secure request 
         conn.close()
         raise HTTPException(status_code=404, detail="Consent request not found for provided token")
 
+    req = dict(row)
+
+    # Server-side Expiry Check
+    if check_request_expiry(req, conn):
+        conn.close()
+        raise HTTPException(status_code=410, detail="Consent request link has expired.")
+
     result = hydrate_request(row, conn)
     conn.close()
     return result
@@ -160,6 +200,13 @@ def get_consent_request_by_notice(notice_id: str = Path(...)):
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Consent request not found for notice ID")
+
+    req = dict(row)
+
+    # Server-side Expiry Check
+    if check_request_expiry(req, conn):
+        conn.close()
+        raise HTTPException(status_code=410, detail="Consent request link has expired.")
 
     result = hydrate_request(row, conn)
     conn.close()
@@ -186,6 +233,13 @@ def get_consent_request_by_token_path(request_token: str = Path(..., description
         conn.close()
         raise HTTPException(status_code=404, detail=f"Consent request not found for token/id: {request_token}")
 
+    req = dict(row)
+
+    # Server-side Expiry Check
+    if check_request_expiry(req, conn):
+        conn.close()
+        raise HTTPException(status_code=410, detail="Consent request link has expired.")
+
     result = hydrate_request(row, conn)
     conn.close()
     return result
@@ -198,7 +252,7 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM consent_requests WHERE id = ? OR notice_id = ?;", (request_id, request_id))
+    cursor.execute("SELECT * FROM consent_requests WHERE id = ? OR notice_id = ? OR token = ?;", (request_id, request_id, request_id))
     req_row = cursor.fetchone()
     if not req_row:
         conn.close()
@@ -206,6 +260,77 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
 
     req = dict(req_row)
     now = datetime.utcnow().isoformat() + "Z"
+
+    # Security Check 1: Expiry Validation
+    if check_request_expiry(req, conn):
+        conn.close()
+        raise HTTPException(status_code=410, detail="Cannot record decision: Consent request link has expired.")
+
+    # Security Check 2: Protection against Duplicate Submissions
+    if req["status"] in ["GRANTED", "DENIED"]:
+        cursor.execute("""
+        INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (
+            f"AUD-{random.randint(100, 999)}",
+            req["id"],
+            "N/A",
+            req["data_principal_id"],
+            "DUPLICATE_SUBMISSION_PREVENTED",
+            req["fiduciary_name"],
+            req["notice_id"],
+            f"Prevented duplicate decision submission. Status is already {req['status']}.",
+            "103.21.124.88",
+            now,
+            "SECURITY_PROTECTED"
+        ))
+        conn.commit()
+
+        # Fetch existing consent if present
+        cursor.execute("SELECT * FROM consents WHERE notice_id = ? AND status = 'ACTIVE';", (req["notice_id"],))
+        existing_consent = cursor.fetchone()
+        conn.close()
+        return {
+            "success": True,
+            "already_processed": True,
+            "message": f"Consent request already processed as {req['status']}.",
+            "status": req["status"],
+            "consent": dict(existing_consent) if existing_consent else None
+        }
+
+    # Security Check 3: Server-side Mandatory Attribute Validation
+    if payload.decision == "GRANTED":
+        attributes = json.loads(req["requested_attributes"])
+        selected_set = set(payload.selected_attributes or [])
+        for attr in attributes:
+            if attr.get("required"):
+                attr_id = attr.get("id")
+                attr_name = attr.get("name")
+                if attr_id not in selected_set and attr_name not in selected_set:
+                    # Security Violation Attempt
+                    cursor.execute("""
+                    INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """, (
+                        f"AUD-{random.randint(100, 999)}",
+                        req["id"],
+                        "N/A",
+                        req["data_principal_id"],
+                        "MANDATORY_ATTRIBUTE_OMISSION_ATTEMPT",
+                        req["fiduciary_name"],
+                        req["notice_id"],
+                        f"Rejected grant attempt missing mandatory attribute '{attr_name}'.",
+                        "103.21.124.88",
+                        now,
+                        "SECURITY_REJECTED"
+                    ))
+                    conn.commit()
+                    conn.close()
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Server Security Violation: Mandatory attribute '{attr_name}' must be accepted to grant consent."
+                    )
+
     decision_id = f"DEC-{int(datetime.utcnow().timestamp() * 1000)}"
 
     # Insert into consent_decisions
@@ -283,7 +408,7 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
             "customNote": payload.remark
         }
 
-    # Record Audit Event
+    # Record Audit Event with Authoritative Server Timestamp
     audit_id = f"AUD-{random.randint(100, 999)}"
     audit_action = "CONSENT_GRANTED" if payload.decision == "GRANTED" else "CONSENT_DENIED"
     audit_details = f"Granted {len(payload.selected_attributes)} attributes." if payload.decision == "GRANTED" else f"Consent request declined. Reason: {payload.remark or 'Declined'}"
@@ -403,7 +528,7 @@ def revoke_consent(consent_id: str, payload: RevokePayload):
         "CONSENT_REVOKED",
         consent["fiduciary_name"],
         consent["notice_id"],
-        f"Consent revoked. Reason: {payload.reason}",
+        f"Consent revoked under DPDP Sec 6(4). Reason: {payload.reason}",
         "103.21.124.88",
         now,
         "REVOKED"
@@ -517,7 +642,7 @@ def list_dsr_requests(principalId: Optional[str] = Query(None)):
 
 if __name__ == "__main__":
     print("====================================================")
-    print("DP Consent Manager Python FastAPI Backend starting")
+    print("DP Consent Manager Python FastAPI Security Backend")
     print("REST Base URL: http://localhost:8000/api")
     print("====================================================")
     uvicorn.run(app, host="0.0.0.0", port=8000)

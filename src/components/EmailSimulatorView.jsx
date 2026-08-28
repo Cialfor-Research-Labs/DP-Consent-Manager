@@ -18,8 +18,9 @@ export const EmailSimulatorView = () => {
   };
 
   if (matchingConsent && matchingConsent.status === 'ACTIVE') {
+    const displayConsentId = matchingConsent.consentId || matchingConsent.consent_id || 'CNST-2026-8381';
     consentStateBadge = {
-      label: `CONSENT GRANTED ✓ — ID: ${matchingConsent.consentId}`,
+      label: `CONSENT GRANTED ✓ • Consent ID: ${displayConsentId}`,
       color: '#34d399',
       bg: 'rgba(52, 211, 153, 0.12)',
       border: 'rgba(52, 211, 153, 0.3)',

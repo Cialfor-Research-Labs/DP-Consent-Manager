@@ -57,18 +57,6 @@ export const ConsentProvider = ({ children }) => {
 
   const t = (key) => getTranslation(language, key);
 
-  // Language State for DPDP Act Section 5(3) Multilingual Support
-  const [language, setLanguageState] = useState(() => {
-    return localStorage.getItem('dp_lang') || 'en';
-  });
-
-  const setLanguage = (langCode) => {
-    setLanguageState(langCode);
-    localStorage.setItem('dp_lang', langCode);
-  };
-
-  const t = (key) => getTranslation(language, key);
-
   // Selected attributes map for the active scenario: { attr_id: boolean }
   const [selectedAttributes, setSelectedAttributes] = useState({});
 

@@ -1,7 +1,6 @@
 import React from 'react';
 import { ConsentProvider, useConsent } from './context/ConsentContext';
 import { Header } from './components/Header';
-import { ScenarioBar } from './components/ScenarioBar';
 import { EmailSimulatorView } from './components/EmailSimulatorView';
 import { ConsentDecisionHub } from './components/ConsentDecisionHub';
 import { ActiveConsentsView } from './components/ActiveConsentsView';
@@ -17,7 +16,6 @@ const MainAppContent = () => {
 
   return (
     <div className="app-container">
-      <ScenarioBar />
       <Header />
 
       {loading && (

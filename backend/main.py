@@ -63,10 +63,11 @@ def hydrate_request(req_row, conn):
     req["emailSnapshot"] = es_dict
 
     # Compatibility mappings for frontend UI
+    req["domain"] = req.get("domain") or "Corporate/Enterprise"
     req["title"] = req.get("purpose") or req.get("subject") or "Consent Request Notice"
     req["fiduciary"] = req["fiduciary_name"]
-    req["fiduciaryCategory"] = req["fiduciary_category"]
-    req["fiduciaryLogo"] = req["fiduciary_logo"]
+    req["fiduciaryCategory"] = req.get("fiduciary_category") or "Corporate Fiduciary"
+    req["fiduciaryLogo"] = req.get("fiduciary_logo") or "🏢"
     req["fiduciaryEmail"] = req["fiduciary_email"]
     req["dpoName"] = req["dpo_name"]
     req["dpoEmail"] = req["dpo_email"]
@@ -137,8 +138,107 @@ def dynamic_create_request_for_token(
     token_lower = token.lower()
     subject_lower = (subject or "").lower()
 
-    # Contextual Ingestion Logic
-    if subject or body or purpose:
+    # Determine Domain & Categories
+    if "bank" in token_lower or "kyc" in token_lower or "bank" in subject_lower:
+        final_domain = "Banking"
+        final_subject = subject or "Action Required: Digital Consent for Savings Account Opening & KYC Verification"
+        final_purpose = purpose or "Account Opening & Digital KYC Verification under RBI Guidelines"
+        final_fiduciary = fiduciary or "ABC National Bank"
+        final_body = body or (
+            f"Dear {dp_name},\n\n"
+            "As part of RBI Mandatory KYC Guidelines and DPDP Act 2023 compliance, ABC National Bank requests your explicit digital consent to verify your Government Identity Proof, PAN Card, and Address details.\n\n"
+            "Thanks & Regards,\nABC Bank KYC Compliance Cell"
+        )
+        requested_attrs = [
+            {"id": "attr_name", "name": "Full Legal Name", "category": "IDENTITY", "required": True, "description": "Legal name matching Aadhaar & PAN card", "sensitive": False},
+            {"id": "attr_govt_id", "name": "Government Photo ID (Aadhaar / Passport)", "category": "IDENTITY", "required": True, "description": "Official government identity proof for RBI KYC", "sensitive": True},
+            {"id": "attr_pan", "name": "Permanent Account Number (PAN Card)", "category": "FINANCIAL", "required": True, "description": "Tax ID for banking transactions and Form 60 verification", "sensitive": True},
+            {"id": "attr_address", "name": "Residential Address Proof", "category": "CONTACT", "required": True, "description": "Utility bill or Aadhaar address for communication", "sensitive": False},
+            {"id": "attr_income", "name": "Annual Income & Occupation Declaration", "category": "FINANCIAL", "required": False, "description": "Optional income declaration for debit card limits", "sensitive": True, "defaultGranted": True}
+        ]
+    elif "health" in token_lower or "med" in token_lower or "health" in subject_lower:
+        final_domain = "Healthcare"
+        final_subject = subject or "Healthcare Privacy Notice: Consent for Diagnostic Records & Health Insurance Processing"
+        final_purpose = purpose or "Diagnostic Test Report Sharing & Cashless Health Insurance Claim Settlement"
+        final_fiduciary = fiduciary or "Apollo Care Hospital"
+        final_body = body or (
+            f"Dear {dp_name},\n\n"
+            "Apollo Care Hospital requires your consent to share diagnostic test reports and medical history with your empaneled Health Insurance Provider for cashless claim processing.\n\n"
+            "Thanks & Regards,\nApollo Care Privacy Officer"
+        )
+        requested_attrs = [
+            {"id": "attr_name", "name": "Patient Full Name & DOB", "category": "IDENTITY", "required": True, "description": "Patient identity matching hospital registration", "sensitive": False},
+            {"id": "attr_medical", "name": "Medical Diagnostic Reports & Lab History", "category": "HEALTH", "required": True, "description": "Diagnostic reports required for health insurance claim processing", "sensitive": True},
+            {"id": "attr_insurance", "name": "Health Insurance Policy Number", "category": "HEALTH", "required": True, "description": "TPA insurance card number for cashless hospital approval", "sensitive": True},
+            {"id": "attr_contact", "name": "Emergency Contact & Next of Kin", "category": "CONTACT", "required": False, "description": "Phone number of emergency contact person", "sensitive": False, "defaultGranted": True}
+        ]
+    elif "fintech" in token_lower or "loan" in token_lower or "credit" in token_lower or "loan" in subject_lower:
+        final_domain = "FinTech"
+        final_subject = subject or "FinTech Notice: Consent for Credit Score & Bank Statement Analysis"
+        final_purpose = purpose or "Credit Score Assessment & Bank Statement Verification for Instant Credit Line"
+        final_fiduciary = fiduciary or "PayFlex Lending"
+        final_body = body or (
+            f"Dear {dp_name},\n\n"
+            "To evaluate your instant credit line application, PayFlex Lending requests consent to fetch your CIBIL Credit Score and verify recent 6-month bank statements.\n\n"
+            "Thanks & Regards,\nPayFlex Lending Underwriting Team"
+        )
+        requested_attrs = [
+            {"id": "attr_name", "name": "Borrower Full Name", "category": "IDENTITY", "required": True, "description": "Name matching credit bureau records", "sensitive": False},
+            {"id": "attr_cibil", "name": "CIBIL / Experian Credit Score Report", "category": "FINANCIAL", "required": True, "description": "Credit bureau score for instant loan approval", "sensitive": True},
+            {"id": "attr_bank_stmt", "name": "6-Month Bank Account Statement", "category": "FINANCIAL", "required": True, "description": "Bank statement PDF for income verification", "sensitive": True},
+            {"id": "attr_device", "name": "Device & Location Fingerprint", "category": "DIGITAL", "required": False, "description": "Anti-fraud device location check for instant disbursement", "sensitive": True, "defaultGranted": True}
+        ]
+    elif "ecom" in token_lower or "order" in token_lower or "retail" in token_lower:
+        final_domain = "E-Commerce"
+        final_subject = subject or "E-Commerce Notice: Consent for Order Delivery & Saved Payment Method Processing"
+        final_purpose = purpose or "Order Fulfillment, Address Verification & Tokenized Express Checkout"
+        final_fiduciary = fiduciary or "ShopEase Retail"
+        final_body = body or (
+            f"Dear {dp_name},\n\n"
+            "ShopEase Retail requests your consent to store shipping address details and tokenized payment card information for fast checkout and delivery updates.\n\n"
+            "Thanks & Regards,\nShopEase Customer Trust Team"
+        )
+        requested_attrs = [
+            {"id": "attr_name", "name": "Customer Full Name", "category": "IDENTITY", "required": True, "description": "Name for order invoice and package delivery", "sensitive": False},
+            {"id": "attr_address", "name": "Shipping & Delivery Address", "category": "CONTACT", "required": True, "description": "Physical delivery location for courier partners", "sensitive": False},
+            {"id": "attr_phone", "name": "Mobile Phone Number", "category": "CONTACT", "required": True, "description": "SMS delivery updates and courier OTP verification", "sensitive": False},
+            {"id": "attr_card", "name": "Tokenized Payment Card Details", "category": "FINANCIAL", "required": False, "description": "RBI compliant tokenized card data for 1-click checkout", "sensitive": True, "defaultGranted": False}
+        ]
+    elif "bgv" in token_lower or "corp" in token_lower or "employment" in token_lower:
+        final_domain = "Corporate HR"
+        final_subject = subject or "Corporate HR Notice: Background Verification & Employment Record Clearance"
+        final_purpose = purpose or "Employee Background Verification & Degree Credentials Clearance"
+        final_fiduciary = fiduciary or "GlobalTech Solutions"
+        final_body = body or (
+            f"Dear {dp_name},\n\n"
+            "As part of your employment onboarding, GlobalTech HR requests consent to process your background verification, degree certificates, and prior employment reference checks.\n\n"
+            "Thanks & Regards,\nGlobalTech Onboarding HR"
+        )
+        requested_attrs = [
+            {"id": "attr_name", "name": "Employee Full Name", "category": "IDENTITY", "required": True, "description": "Official employee onboarding name", "sensitive": False},
+            {"id": "attr_bgv", "name": "Background Verification & Criminal Check", "category": "LEGAL/VERIFICATION", "required": True, "description": "Third-party agency background check report", "sensitive": True},
+            {"id": "attr_degree", "name": "Degree Certificates & Marksheets", "category": "PROFESSIONAL", "required": True, "description": "Educational degree verification from university registrar", "sensitive": True},
+            {"id": "attr_prior_emp", "name": "Prior Employment Experience Letter", "category": "PROFESSIONAL", "required": False, "description": "Relieving letter and HR reference check", "sensitive": False, "defaultGranted": True}
+        ]
+    elif "pf" in token_lower or "provident" in token_lower:
+        final_domain = "Corporate HR"
+        final_subject = subject or "Action Required: Consent for PF Account Processing"
+        final_purpose = purpose or "Collection and processing of personal data for PF (Provident Fund) account registration, UAN linking, and statutory compliance under EPFO guidelines."
+        final_fiduciary = fiduciary or "Cialfor Research Labs Private Limited (HR & Payroll Cell)"
+        final_body = body or (
+            f"Dear {dp_name},\n\n"
+            "As part of our PF (Provident Fund) account processing and related statutory requirements, we are required to collect and process certain personal information.\n\n"
+            "Thanks & Regards,\nPrerna Pandey\nAI Specialist\nCialfor Research Labs Private Limited"
+        )
+        requested_attrs = [
+            {"id": "attr_name", "name": "Full Legal Name & Employee ID", "category": "IDENTITY", "required": True, "description": "Official name and employee ID for EPFO records", "sensitive": False},
+            {"id": "attr_uan", "name": "Universal Account Number (UAN) & PF ID", "category": "FINANCIAL", "required": True, "description": "EPFO UAN for Provident Fund account linking", "sensitive": True},
+            {"id": "attr_pan", "name": "Permanent Account Number (PAN Card)", "category": "FINANCIAL", "required": True, "description": "Tax identity verification for PF contribution tax exemption", "sensitive": True},
+            {"id": "attr_bank", "name": "Bank Account Number & IFSC Code", "category": "FINANCIAL", "required": True, "description": "Direct bank account for PF withdrawal/transfer credit", "sensitive": True},
+            {"id": "attr_kyc", "name": "Aadhaar / Government KYC Document", "category": "IDENTITY", "required": True, "description": "EPFO mandatory e-KYC biometric identity verification", "sensitive": True}
+        ]
+    else:
+        final_domain = "Corporate/Enterprise"
         final_subject = subject or "Action Required: Digital Data Processing Consent Notice"
         final_purpose = purpose or "Collection and processing of personal data for statutory and organizational requirements."
         final_fiduciary = fiduciary or "Cialfor Research Labs Private Limited"
@@ -146,91 +246,13 @@ def dynamic_create_request_for_token(
             f"Dear {dp_name},\n\n"
             f"We request your explicit consent for processing your personal data for: {final_purpose}\n\n"
             "Kindly review the requested data attributes and statutory terms on the Consent Manager Portal.\n\n"
-            "Thanks & Regards,\nPrerna Pandey\nAI Specialist\nCialfor Research Labs Private Limited"
+            "Thanks & Regards,\nCialfor Privacy Compliance Officer"
         )
         requested_attrs = [
-            {"id": "attr_name", "name": "Full Name & Official Identity", "category": "Identity", "required": True, "description": "Official name of Data Principal", "sensitive": False},
-            {"id": "attr_email", "name": "Email Address", "category": "Contact", "required": True, "description": "Contact email address", "sensitive": False},
-            {"id": "attr_phone", "name": "Mobile Phone Number", "category": "Contact", "required": True, "description": "Direct mobile contact number", "sensitive": False},
-            {"id": "attr_documents", "name": "Supporting Documents / Records", "category": "Verification", "required": False, "description": "Specific records requested for service delivery", "sensitive": True, "defaultGranted": True}
-        ]
-    elif "pf" in token_lower or "provident" in token_lower or "pf" in subject_lower:
-        final_subject = "Action Required: Consent for PF Account Processing"
-        final_purpose = "Collection and processing of personal data for PF (Provident Fund) account registration, UAN linking, and statutory compliance under EPFO guidelines."
-        final_fiduciary = "Cialfor Research Labs Private Limited (HR & Payroll Cell)"
-        final_body = (
-            "Dear Employee,\n\n"
-            "As part of our PF (Provident Fund) account processing and related statutory requirements, we are required to collect and process certain personal information.\n\n"
-            "We request you to review the consent notice and provide your consent for the collection and processing of your personal data for the specified PF-related purposes.\n\n"
-            "Please click on the link below to access the Consent Manager and provide your consent:\n\n"
-            "Provide Consent for PF Account Processing\n\n"
-            "The Consent Manager will provide you with details regarding the personal data being requested, the purpose of processing, and the applicable consent options.\n\n"
-            "Kindly review the information carefully and provide your consent through the Consent Manager at your earliest convenience.\n\n"
-            "If you have any questions or concerns regarding the processing of your personal data, please contact HR.\n\n"
-            "Thanks & Regards,\n"
-            "Prerna Pandey\n"
-            "AI Specialist\n"
-            "Cialfor Research Labs Private Limited"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Full Legal Name & Employee ID", "category": "Identity", "required": True, "description": "Official name and employee ID for EPFO records", "sensitive": False},
-            {"id": "attr_uan", "name": "Universal Account Number (UAN) & PF ID", "category": "PF Account", "required": True, "description": "EPFO UAN for Provident Fund account linking", "sensitive": True},
-            {"id": "attr_pan", "name": "Permanent Account Number (PAN Card)", "category": "Financial / Tax", "required": True, "description": "Tax identity verification for PF contribution tax exemption", "sensitive": True},
-            {"id": "attr_bank", "name": "Bank Account Number & IFSC Code", "category": "Financial", "required": True, "description": "Direct bank account for PF withdrawal/transfer credit", "sensitive": True},
-            {"id": "attr_kyc", "name": "Aadhaar / Government KYC Document", "category": "Identity KYC", "required": True, "description": "EPFO mandatory e-KYC biometric identity verification", "sensitive": True},
-            {"id": "attr_salary", "name": "Salary Slip & PF Contribution Statement", "category": "Employment", "required": False, "description": "Monthly PF deduction breakdown statement", "sensitive": True, "defaultGranted": True},
-            {"id": "attr_nominee", "name": "PF Nominee Details (Section 14)", "category": "Legal Nominee", "required": False, "description": "Family nominee for PF benefit transfer upon emergency", "sensitive": False, "defaultGranted": True}
-        ]
-    elif "scholarship" in token_lower or "merit" in token_lower:
-        final_subject = "Consent Notice: Verification of Records for National Merit Scholarship 2026"
-        final_purpose = "Verification of annual family income, bank account details, and marksheets for disbursement of Merit-cum-Means Financial Assistance."
-        final_fiduciary = "Higher Education Scholarship Board (HESB)"
-        final_body = (
-            f"Dear {dp_name},\n\n"
-            "Your application for the National Merit Scholarship 2026 has passed initial screening.\n\n"
-            "To proceed with bank disbursement, the Higher Education Scholarship Board requires your digital consent to verify your financial and academic documents.\n\n"
-            "Thanks & Regards,\nHESB Nodal Officer"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Full Legal Name", "category": "Identity", "required": True, "description": "Name matching bank account and Aadhaar", "sensitive": False},
-            {"id": "attr_income", "name": "Annual Family Income Certificate", "category": "Financial", "required": True, "description": "Tehsildar issued income proof document", "sensitive": True},
-            {"id": "attr_bank", "name": "Bank Account & IFSC Code", "category": "Financial", "required": True, "description": "Bank details for direct credit of scholarship amount", "sensitive": True}
-        ]
-    else:
-        final_subject = "Recruitment & Placement Data Processing"
-        final_purpose = "Accessing and processing documents and personal information for campus recruitment and placement activities."
-        final_fiduciary = fiduciary or "Cialfor Research Labs Private Limited"
-        final_body = (
-            f"Dear {dp_name},\n\n"
-            "We request your consent to access and process certain documents and personal information "
-            "for the purpose of campus recruitment and placement activities.\n\n"
-            "1. Purpose of Processing\n"
-            "Your information will be used for:\n"
-            " • Evaluating your eligibility for recruitment opportunities\n"
-            " • Sharing your profile with relevant participating recruiters\n"
-            " • Shortlisting candidates for interviews and recruitment processes\n"
-            " • Verifying academic qualifications and other eligibility criteria\n"
-            " • Coordinating interview and placement-related communication\n\n"
-            "2. Documents & Data Requested\n"
-            "Depending on your consent selection, we may request access to:\n"
-            " • Resume / CV\n"
-            " • Academic marksheets and CGPA\n"
-            " • Degree / educational certificates\n"
-            " • Student identification details\n"
-            " • Institutional email address\n"
-            " • Mobile phone number\n"
-            " • Backlog / arrears information\n\n"
-            "Thanks & Regards,\n"
-            "Prerna Pandey\n"
-            "AI Specialist\n"
-            "Cialfor Research Labs Private Limited"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Full Legal Name & Identity", "category": "Identity", "required": True, "description": "Official name for recruitment registration", "sensitive": False},
-            {"id": "attr_email", "name": "Institutional Email Address", "category": "Contact", "required": True, "description": "Email address for interview call letters", "sensitive": False},
-            {"id": "attr_phone", "name": "Mobile Phone Number", "category": "Contact", "required": True, "description": "Direct phone number for recruiter coordination", "sensitive": False},
-            {"id": "attr_cgpa", "name": "Academic Marksheets & CGPA", "category": "Academic", "required": False, "description": "Semester marksheets for eligibility verification", "sensitive": True, "defaultGranted": True},
-            {"id": "attr_resume", "name": "Resume / CV Document", "category": "Professional", "required": False, "description": "PDF Resume to be shared with visiting recruitment teams", "sensitive": False, "defaultGranted": True}
+            {"id": "attr_name", "name": "Full Name & Official Identity", "category": "IDENTITY", "required": True, "description": "Official name of Data Principal", "sensitive": False},
+            {"id": "attr_email", "name": "Email Address", "category": "CONTACT", "required": True, "description": "Contact email address", "sensitive": False},
+            {"id": "attr_phone", "name": "Mobile Phone Number", "category": "CONTACT", "required": True, "description": "Direct mobile contact number", "sensitive": False},
+            {"id": "attr_documents", "name": "Supporting Documents / Records", "category": "LEGAL/VERIFICATION", "required": False, "description": "Specific records requested for service delivery", "sensitive": True, "defaultGranted": True}
         ]
 
     # 2. Create EmailSnapshot
@@ -258,8 +280,8 @@ def dynamic_create_request_for_token(
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
 
     cursor.execute("""
-    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, domain, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         req_id,
         token,
@@ -267,12 +289,13 @@ def dynamic_create_request_for_token(
         dp_id,
         snapshot_id,
         final_fiduciary,
-        "Corporate Fiduciary",
+        f"{final_domain} Fiduciary",
         "🏢",
-        "prerna.p@cialfor.com",
+        "privacy@cialfor.com",
         "Prerna Pandey (AI Specialist)",
         "dpo@cialfor.com",
         final_purpose,
+        final_domain,
         "Consent under DPDP Act 2023 (Section 6)",
         "12 Months",
         "India (MeitY Empanelled Cloud)",

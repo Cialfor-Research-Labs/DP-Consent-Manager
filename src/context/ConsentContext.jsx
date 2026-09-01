@@ -11,8 +11,60 @@ import { consentApi } from '../api/consentApi';
 
 const ConsentContext = createContext();
 
+export const formatBackendResponseToScenario = (res) => {
+  if (!res) return null;
+  const dp = res.dataPrincipal || {};
+  const es = res.emailSnapshot || {};
+
+  return {
+    id: res.id,
+    token: res.token || res.id,
+    title: res.purpose || res.emailSubject || "Consent Request Notice",
+    dataPrincipal: {
+      id: dp.id || res.data_principal_id || "DP-2026-00000",
+      name: dp.name || "Data Principal",
+      email: dp.email || "principal@example.com",
+      phone: dp.phone || "+91 98765 43210",
+      rollNo: dp.roll_no || dp.rollNo || "DP-REF-2026",
+      institution: dp.institution || "Cialfor Partner Institution",
+      kycStatus: dp.kyc_status || dp.kycStatus || "Verified",
+      registeredOn: dp.registered_on || dp.registeredOn || "2026-08-28"
+    },
+    fiduciary: res.fiduciary || res.fiduciary_name || "Data Fiduciary",
+    fiduciaryCategory: res.fiduciaryCategory || res.fiduciary_category || "Corporate Entity",
+    fiduciaryLogo: res.fiduciaryLogo || res.fiduciary_logo || "🏢",
+    fiduciaryEmail: res.fiduciaryEmail || res.fiduciary_email || "dpo@fiduciary.com",
+    dpoName: res.dpoName || res.dpo_name || "Data Protection Officer",
+    dpoEmail: res.dpoEmail || res.dpo_email || "dpo@fiduciary.com",
+    purpose: res.purpose || "Processing personal data for requested service",
+    noticeId: res.noticeId || res.notice_id || "NTC-2026-GEN-001",
+    legalBasis: res.legalBasis || res.legal_basis || "Consent under DPDP Act 2023 (Section 6)",
+    validityPeriod: res.validityPeriod || res.validity_period || "12 Months",
+    dataRegion: res.dataRegion || res.data_region || "India (MeitY Empanelled Cloud)",
+    attributes: res.attributes || res.requestedAttributes || [
+      { id: "attr_name", name: "Full Name", category: "Identity", required: true, description: "Official name of Data Principal", sensitive: false },
+      { id: "attr_email", name: "Email Address", category: "Contact", required: true, description: "Contact email address", sensitive: false },
+      { id: "attr_phone", name: "Mobile Phone Number", category: "Contact", required: false, description: "Contact phone number", sensitive: false }
+    ],
+    emailSnapshot: {
+      from: es.from || es.from_address || `${res.fiduciary || "Data Fiduciary"} <${res.fiduciaryEmail || "fiduciary@example.com"}>`,
+      to: es.to || es.to_address || `${dp.name || "Data Principal"} <${dp.email || "principal@example.com"}>`,
+      subject: es.subject || res.emailSubject || "ACTION REQUIRED: Consent Request Notice",
+      date: es.date || es.sent_date || "Monday, August 31, 2026",
+      body: es.body || es.body_text || res.emailBody || "Please grant consent for processing your personal data.",
+      attachments: es.attachments || [
+        {
+          name: es.attachment_name || `Statutory_Privacy_Notice_${res.noticeId || "NTC-2026"}.pdf`,
+          size: es.attachment_size || "1.2 MB",
+          type: "OFFICIAL DPDP NOTICE SNAPSHOT DOCUMENT"
+        }
+      ]
+    }
+  };
+};
+
 export const ConsentProvider = ({ children }) => {
-  const [scenarios] = useState(MOCK_SCENARIOS);
+  const [scenarios, setScenarios] = useState(MOCK_SCENARIOS);
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState(null);
 
@@ -36,13 +88,13 @@ export const ConsentProvider = ({ children }) => {
   const [activeTab, setActiveTab] = useState('incoming'); // 'incoming', 'email-sim', 'active', 'audit', 'rights'
 
   // Current scenario object (source of truth for fiduciary, purpose & data principal)
-  const currentScenario = scenarios.find(s => s.id === activeScenarioId) || scenarios[0];
+  const currentScenario = scenarios.find(s => s.id === activeScenarioId || s.token === activeScenarioId || s.noticeId === activeScenarioId) || scenarios[0];
 
   // Dynamic Data Principal derived directly from the active consent request email
-  const dataPrincipal = currentScenario.dataPrincipal || {
-    id: "DP-2026-88491",
-    name: "Ananya Sharma",
-    email: "ananya.sharma@delhiuniv.ac.in"
+  const dataPrincipal = currentScenario?.dataPrincipal || {
+    id: "DP-2026-DYNAMIC",
+    name: "Data Principal",
+    email: "principal@example.com"
   };
 
   // Language State for DPDP Act Section 5(3) Multilingual Support
@@ -103,10 +155,6 @@ export const ConsentProvider = ({ children }) => {
       // Fetch Audit Logs
       const fetchedAudit = await consentApi.fetchAuditLogs(dataPrincipal.id);
       if (fetchedAudit && Array.isArray(fetchedAudit)) {
-        setActiveConsents(prevConsents => {
-          // Keep activeConsents synced
-          return prevConsents;
-        });
         setAuditLogs(fetchedAudit);
       }
 
@@ -114,6 +162,24 @@ export const ConsentProvider = ({ children }) => {
       const fetchedDsr = await consentApi.fetchDataRightsRequests(dataPrincipal.id);
       if (fetchedDsr && Array.isArray(fetchedDsr) && fetchedDsr.length > 0) {
         setDsrRequests(fetchedDsr);
+      }
+
+      // Fetch all Consent Requests from Backend and hydrate scenarios list
+      const fetchedRequests = await consentApi.fetchConsentRequests();
+      if (fetchedRequests && Array.isArray(fetchedRequests) && fetchedRequests.length > 0) {
+        const formattedList = fetchedRequests.map(formatBackendResponseToScenario).filter(Boolean);
+        setScenarios(prev => {
+          const combined = [...prev];
+          formattedList.forEach(item => {
+            const idx = combined.findIndex(s => s.id === item.id || s.token === item.token || s.noticeId === item.noticeId);
+            if (idx >= 0) {
+              combined[idx] = item;
+            } else {
+              combined.unshift(item);
+            }
+          });
+          return combined;
+        });
       }
     } catch (err) {
       console.warn('Backend sync failed, using client state:', err);
@@ -134,17 +200,42 @@ export const ConsentProvider = ({ children }) => {
 
     const params = new URLSearchParams(window.location.search);
     const tokenParam = params.get('token') || pathToken;
+    const toEmailParam = params.get('to') || params.get('to_email') || params.get('email') || params.get('principal_email');
+    const toNameParam = params.get('to_name') || params.get('name') || params.get('principal_name');
+    const subjectParam = params.get('subject') || params.get('title');
+    const bodyParam = params.get('body') || params.get('text');
+    const purposeParam = params.get('purpose');
+    const fiduciaryParam = params.get('fiduciary') || params.get('from_name');
 
-    if (tokenParam) {
-      consentApi.getConsentRequestByToken(tokenParam).then((res) => {
-        if (res && res.id) {
-          const matchingScenario = MOCK_SCENARIOS.find(s => s.id === res.id || s.token === res.token || s.noticeId === res.notice_id);
-          if (matchingScenario) {
-            setActiveScenarioId(matchingScenario.id);
-          }
+    const queryObj = {};
+    if (toEmailParam) queryObj.to_email = toEmailParam;
+    if (toNameParam) queryObj.to_name = toNameParam;
+    if (subjectParam) queryObj.subject = subjectParam;
+    if (bodyParam) queryObj.body = bodyParam;
+    if (purposeParam) queryObj.purpose = purposeParam;
+    if (fiduciaryParam) queryObj.fiduciary = fiduciaryParam;
+
+    const targetToken = tokenParam || 'tok_pf_account';
+
+    consentApi.getConsentRequestByToken(targetToken, queryObj).then((res) => {
+      if (res && (res.id || res.token)) {
+        const formatted = formatBackendResponseToScenario(res);
+        if (formatted) {
+          setScenarios(prev => {
+            const idx = prev.findIndex(s => s.id === formatted.id || s.token === formatted.token || s.noticeId === formatted.noticeId);
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = formatted;
+              return copy;
+            }
+            return [formatted, ...prev];
+          });
+          setActiveScenarioId(formatted.id);
         }
-      });
-    }
+      }
+    }).catch(err => {
+      console.warn("Failed to fetch token request from API:", err);
+    });
   }, []);
 
   // Synchronize localStorage
@@ -169,369 +260,250 @@ export const ConsentProvider = ({ children }) => {
     if (currentScenario && currentScenario.attributes) {
       const initialMap = {};
       currentScenario.attributes.forEach(attr => {
-        initialMap[attr.id] = attr.required ? true : (attr.defaultGranted !== false);
+        if (attr.required) {
+          initialMap[attr.id] = true;
+        } else {
+          initialMap[attr.id] = attr.defaultGranted !== false;
+        }
       });
       setSelectedAttributes(initialMap);
     }
-  }, [activeScenarioId, currentScenario]);
+  }, [currentScenario]);
 
-  const showToast = (msg, type = 'success') => {
-    setToastMessage({ text: msg, type });
-    setTimeout(() => setToastMessage(null), 4000);
-  };
-
+  // Toggle individual attribute selection
   const toggleAttribute = (attrId) => {
-    const attr = currentScenario.attributes.find(a => a.id === attrId);
-    if (attr && attr.required) return;
-    setSelectedAttributes(prev => ({
-      ...prev,
-      [attrId]: !prev[attrId]
-    }));
+    setSelectedAttributes(prev => {
+      // Required attributes cannot be un-toggled
+      const attrObj = currentScenario.attributes.find(a => a.id === attrId);
+      if (attrObj && attrObj.required) return prev;
+      return {
+        ...prev,
+        [attrId]: !prev[attrId]
+      };
+    });
   };
 
-  const selectScenario = (scenarioId, switchTab = 'incoming') => {
+  // Switch active scenario
+  const switchScenario = (scenarioId) => {
     setActiveScenarioId(scenarioId);
-    if (switchTab) setActiveTab(switchTab);
+    setActiveTab('incoming');
   };
 
-  const generateHash = () => {
-    return '0x' + Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join('');
-  };
-
-  // Action: Grant Consent -> API
-  const grantCurrentConsent = async (customNote = "") => {
+  // Grant Consent API trigger
+  const grantCurrentConsent = async (customNote = '') => {
     setLoading(true);
-    setApiError(null);
+    const selectedAttrList = currentScenario.attributes
+      .filter(a => selectedAttributes[a.id])
+      .map(a => a.id);
+      
+    const deniedAttrList = currentScenario.attributes
+      .filter(a => !selectedAttributes[a.id])
+      .map(a => a.id);
+
     try {
-      const grantedAttrs = [];
-      const deniedAttrs = [];
-
-      currentScenario.attributes.forEach(attr => {
-        if (selectedAttributes[attr.id]) {
-          grantedAttrs.push(attr.name);
-        } else {
-          deniedAttrs.push(attr.name);
-        }
-      });
-
-      const newConsentId = `CNST-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-      const now = new Date().toISOString();
-      const expiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
-      const hash = generateHash();
-
-      // Dispatch REST API decision payload to Python backend
-      const apiResult = await consentApi.submitConsentDecision(currentScenario.noticeId, {
-        decision: "GRANTED",
-        selected_attributes: Object.keys(selectedAttributes).filter(k => selectedAttributes[k]),
-        denied_attributes: Object.keys(selectedAttributes).filter(k => !selectedAttributes[k]),
-        remark: customNote,
-        notice_id: currentScenario.noticeId,
-        consent_id: newConsentId
-      });
-
-      const newConsentRecord = apiResult?.data?.consent || {
-        consentId: newConsentId,
-        fiduciary: currentScenario.fiduciary,
-        fiduciaryCategory: currentScenario.fiduciaryCategory,
-        fiduciaryLogo: currentScenario.fiduciaryLogo,
-        purpose: currentScenario.purpose,
-        noticeId: currentScenario.noticeId,
-        status: "ACTIVE",
-        grantedOn: now,
-        expiresOn: expiry,
-        grantedAttributes: grantedAttrs,
-        deniedAttributes: deniedAttrs,
-        dpoContact: currentScenario.dpoEmail,
-        dataRegion: currentScenario.dataRegion,
-        receiptHash: hash,
-        customNote: customNote
+      const payload = {
+        decision: 'GRANTED',
+        selected_attributes: selectedAttrList,
+        denied_attributes: deniedAttrList,
+        remark: customNote
       };
 
-      // Add to active consents state & refetch from backend
-      setActiveConsents(prev => [newConsentRecord, ...prev.filter(c => c.noticeId !== currentScenario.noticeId)]);
+      const res = await consentApi.submitConsentDecision(currentScenario.id || currentScenario.noticeId, payload);
+      
+      let consentRecord = res.consent;
+      if (!consentRecord) {
+        consentRecord = {
+          consentId: `CNST-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+          fiduciary: currentScenario.fiduciary,
+          fiduciaryCategory: currentScenario.fiduciaryCategory,
+          fiduciaryLogo: currentScenario.fiduciaryLogo,
+          purpose: currentScenario.purpose,
+          noticeId: currentScenario.noticeId,
+          status: 'ACTIVE',
+          grantedOn: new Date().toISOString(),
+          expiresOn: new Date(Date.now() + 365*24*60*60*1000).toISOString(),
+          grantedAttributes: selectedAttrList,
+          deniedAttributes: deniedAttrList,
+          dpoContact: currentScenario.dpoEmail,
+          dataRegion: currentScenario.dataRegion,
+          receiptHash: `0x${Array.from({length: 32}, () => Math.floor(Math.random()*16).toString(16)).join('')}`,
+          customNote: customNote
+        };
+      }
 
-      const auditEntry = {
-        id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
-        timestamp: now,
-        action: "CONSENT_GRANTED",
-        fiduciary: currentScenario.fiduciary,
-        consentId: newConsentRecord.consentId,
-        noticeId: currentScenario.noticeId,
-        details: `Granted ${grantedAttrs.length} data attributes. Denied: ${deniedAttrs.length ? deniedAttrs.length : 0}.`,
-        ipAddress: "103.21.124.88",
-        status: "SUCCESS"
-      };
-      setAuditLogs(prev => [auditEntry, ...prev]);
-
-      // Set generated receipt for verification modal
-      setLatestReceipt({
-        ...newConsentRecord,
-        principalName: dataPrincipal.name,
-        principalEmail: dataPrincipal.email,
-        principalId: dataPrincipal.id,
-        legalBasis: currentScenario.legalBasis
-      });
-
-      showToast(`Consent granted successfully to ${currentScenario.fiduciary}! Receipt generated.`);
+      setLatestReceipt(consentRecord);
+      
+      // Sync state and refetch from backend
       await refetchBackendData();
+
+      setToastMessage({
+        type: 'success',
+        text: `Consent GRANTED to ${currentScenario.fiduciary}. Receipt generated!`
+      });
+
+      return consentRecord;
     } catch (err) {
-      console.error('Error granting consent via API:', err);
-      setApiError('Failed to record consent decision on backend.');
+      console.error('Grant consent failed:', err);
+      setToastMessage({
+        type: 'error',
+        text: err.message || 'Failed to submit consent decision to server.'
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  // Action: Deny Consent -> API
-  const denyCurrentConsent = async (reason = "Data Principal declined request") => {
+  // Deny Consent API trigger
+  const denyCurrentConsent = async (reason = '') => {
     setLoading(true);
-    setApiError(null);
+    const allAttrIds = currentScenario.attributes.map(a => a.id);
     try {
-      const now = new Date().toISOString();
-
-      await consentApi.submitConsentDecision(currentScenario.noticeId, {
-        decision: "DENIED",
+      const payload = {
+        decision: 'DENIED',
         selected_attributes: [],
-        remark: reason,
-        notice_id: currentScenario.noticeId
-      });
-
-      const auditEntry = {
-        id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
-        timestamp: now,
-        action: "CONSENT_DENIED",
-        fiduciary: currentScenario.fiduciary,
-        consentId: "N/A",
-        noticeId: currentScenario.noticeId,
-        details: `Consent request declined. Reason: ${reason}`,
-        ipAddress: "103.21.124.88",
-        status: "DENIED"
+        denied_attributes: allAttrIds,
+        remark: reason
       };
-      setAuditLogs(prev => [auditEntry, ...prev]);
-      showToast(`Consent request declined for ${currentScenario.fiduciary}.`, 'info');
+
+      await consentApi.submitConsentDecision(currentScenario.id || currentScenario.noticeId, payload);
       await refetchBackendData();
+
+      setToastMessage({
+        type: 'info',
+        text: `Consent DENIED to ${currentScenario.fiduciary}. Logged in Audit Trail.`
+      });
     } catch (err) {
-      console.error('Error denying consent via API:', err);
-      setApiError('Failed to record denial decision on backend.');
+      console.error('Deny consent failed:', err);
+      setToastMessage({
+        type: 'error',
+        text: err.message || 'Failed to submit denial decision.'
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  // Action: Revoke Active Consent -> API
-  const revokeConsent = async (consentId, reason = "User exercised right to withdraw consent under DPDP Act") => {
+  // Revoke Consent API trigger
+  const revokeConsent = async (consentId, reason = '') => {
     setLoading(true);
-    setApiError(null);
     try {
-      const consentToRevoke = activeConsents.find(c => c.consentId === consentId);
-      if (!consentToRevoke) return;
-
-      await consentApi.revokeConsent(consentId, {
-        reason: reason,
-        revoked_at: new Date().toISOString()
-      });
-
-      setActiveConsents(prev => prev.map(c => {
-        if (c.consentId === consentId) {
-          return { ...c, status: "REVOKED", revokedOn: new Date().toISOString(), revocationReason: reason };
-        }
-        return c;
-      }));
-
-      const auditEntry = {
-        id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
-        timestamp: new Date().toISOString(),
-        action: "CONSENT_REVOKED",
-        fiduciary: consentToRevoke.fiduciary,
-        consentId: consentId,
-        noticeId: consentToRevoke.noticeId,
-        details: `Consent revoked. Reason: ${reason}`,
-        ipAddress: "103.21.124.88",
-        status: "REVOKED"
-      };
-      setAuditLogs(prev => [auditEntry, ...prev]);
-
-      showToast(`Consent ${consentId} for ${consentToRevoke.fiduciary} has been revoked. Notice dispatched to Data Fiduciary.`, 'warning');
+      await consentApi.revokeConsent(consentId, reason);
       await refetchBackendData();
+
+      setToastMessage({
+        type: 'warning',
+        text: `Consent ${consentId} has been REVOKED under DPDP Sec 6(4).`
+      });
     } catch (err) {
-      console.error('Error revoking consent via API:', err);
-      setApiError('Failed to dispatch consent revocation to backend.');
+      console.error('Revoke consent failed:', err);
+      setToastMessage({
+        type: 'error',
+        text: err.message || 'Failed to revoke consent.'
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  // Action: Submit Grievance
-  const submitGrievance = (grievanceData) => {
-    const auditEntry = {
-      id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
-      timestamp: new Date().toISOString(),
-      action: "GRIEVANCE_FILED",
-      fiduciary: grievanceData.fiduciary,
-      consentId: grievanceData.consentId || "N/A",
-      details: `Grievance type: ${grievanceData.type}. Description: ${grievanceData.description.substring(0, 60)}...`,
-      ipAddress: "103.21.124.88",
-      status: "PENDING_DPO_RESPONSE"
-    };
-    setAuditLogs(prev => [auditEntry, ...prev]);
-    setGrievanceModalOpen(false);
-    showToast(`Grievance submitted to DPO (${grievanceData.dpoEmail}). Ticket ID: GRV-2026-${Math.floor(1000 + Math.random() * 9000)}.`);
+  // Update Nominee
+  const updateNominee = (newNomineeData) => {
+    setNomineeState(newNomineeData);
+    setToastMessage({
+      type: 'success',
+      text: 'Legal Nominee details updated under DPDP Act Section 14.'
+    });
   };
 
-  // Action: Update Statutory Nominee (Section 14)
-  const updateNominee = (updatedNomineeData) => {
-    const newNominee = {
-      ...updatedNomineeData,
-      dateDesignated: new Date().toISOString().split('T')[0],
-      status: "ACTIVE_VERIFIED"
-    };
-    setNomineeState(newNominee);
-
-    const auditEntry = {
-      id: `AUD-${Math.floor(100 + Math.random() * 900)}`,
-      timestamp: new Date().toISOString(),
-      action: "NOMINEE_UPDATED",
-      fiduciary: "Central Privacy Registry",
-      consentId: "N/A",
-      details: `Updated designated nominee to ${newNominee.nomineeName} (${newNominee.relationship}).`,
-      ipAddress: "103.21.124.88",
-      status: "SUCCESS"
-    };
-    setAuditLogs(prev => [auditEntry, ...prev]);
-    setNominationModalOpen(false);
-    showToast(`Statutory Nominee updated to ${newNominee.nomineeName} (DPDP Sec 14).`);
-  };
-
-  // Action: Submit Right to Erasure / Data Deletion Request (Section 12) -> API
-  const submitErasureRequest = async (erasureData) => {
+  // Submit DSR Request API trigger
+  const submitDsrRequest = async (requestType, targetFiduciary, details) => {
     setLoading(true);
     try {
-      const ticketId = `DSR-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-      const now = new Date().toISOString();
-      const slaDeadline = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-      await consentApi.submitDataRightsRequest({
+      const res = await consentApi.submitDataRightsRequest({
         dataPrincipalId: dataPrincipal.id,
-        requestType: "ERASURE",
-        targetFiduciary: erasureData.fiduciary,
-        details: { scope: erasureData.details || "Complete data erasure requested under Sec 12." }
+        requestType,
+        targetFiduciary,
+        details
       });
 
-      const newRequest = {
-        ticketId,
-        type: "RIGHT_TO_ERASURE",
-        fiduciary: erasureData.fiduciary,
-        consentId: erasureData.consentId || "N/A",
-        details: erasureData.details || "Complete data erasure requested under DPDP Act Section 12.",
-        submittedOn: now,
-        status: "PROCESSING",
-        slaDeadline,
-        completionHash: "PENDING"
-      };
-      setDsrRequests(prev => [newRequest, ...prev]);
-
-      showToast(`Erasure Request submitted to ${erasureData.fiduciary}. Ticket ID: ${ticketId}.`);
       await refetchBackendData();
-    } catch (err) {
-      console.error('Error submitting erasure request:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  // Action: Submit Right to Data Correction Request (Section 11) -> API
-  const submitCorrectionRequest = async (correctionData) => {
-    setLoading(true);
-    try {
-      const ticketId = `DSR-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-      const now = new Date().toISOString();
-      const slaDeadline = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-      await consentApi.submitDataRightsRequest({
-        dataPrincipalId: dataPrincipal.id,
-        requestType: "CORRECTION",
-        targetFiduciary: correctionData.fiduciary,
-        details: { fieldName: correctionData.fieldName, newValue: correctionData.newValue }
+      setToastMessage({
+        type: 'success',
+        text: `Statutory ${requestType} request submitted! Ticket ID: ${res.id || 'DSR-2026-NEW'}`
       });
 
-      const newRequest = {
-        ticketId,
-        type: "RIGHT_TO_CORRECTION",
-        fiduciary: correctionData.fiduciary,
-        consentId: "N/A",
-        details: `Field: ${correctionData.fieldName}. Updated Value: ${correctionData.newValue}. Reason: ${correctionData.reason}`,
-        submittedOn: now,
-        status: "PROCESSING",
-        slaDeadline,
-        completionHash: "PENDING"
-      };
-      setDsrRequests(prev => [newRequest, ...prev]);
-
-      showToast(`Data Correction Request submitted to ${correctionData.fiduciary}. Ticket ID: ${ticketId}.`);
-      await refetchBackendData();
+      return res;
     } catch (err) {
-      console.error('Error submitting correction request:', err);
+      console.error('DSR submission failed:', err);
+      setToastMessage({
+        type: 'error',
+        text: err.message || 'Failed to submit statutory request.'
+      });
     } finally {
       setLoading(false);
     }
   };
 
   const resetToDefaults = () => {
-    setActiveConsents(INITIAL_ACTIVE_CONSENTS);
-    setAuditLogs(INITIAL_AUDIT_LOGS);
-    setNomineeState(INITIAL_NOMINEE);
-    setDsrRequests(INITIAL_DSR_REQUESTS);
     localStorage.removeItem('dp_active_consents');
     localStorage.removeItem('dp_audit_logs');
     localStorage.removeItem('dp_nominee');
     localStorage.removeItem('dp_dsr_requests');
-    refetchBackendData();
-    showToast("Reset consent manager to demo default records.", "info");
+    localStorage.removeItem('dp_lang');
+    window.location.reload();
+  };
+
+  const value = {
+    scenarios,
+    activeScenarioId,
+    currentScenario,
+    dataPrincipal,
+    activeTab,
+    setActiveTab,
+    switchScenario,
+    selectScenario: switchScenario,
+    language,
+    setLanguage,
+    INDIC_LANGUAGES,
+    t,
+    selectedAttributes,
+    toggleAttribute,
+    activeConsents,
+    auditLogs,
+    nominee,
+    updateNominee,
+    dsrRequests,
+    submitDsrRequest,
+    grantCurrentConsent,
+    denyCurrentConsent,
+    revokeConsent,
+    resetToDefaults,
+    nominationModalOpen,
+    setNominationModalOpen,
+    latestReceipt,
+    setLatestReceipt,
+    grievanceModalOpen,
+    setGrievanceModalOpen,
+    grievanceTarget,
+    setGrievanceTarget,
+    toastMessage,
+    setToastMessage,
+    loading,
+    apiError,
+    refetchBackendData
   };
 
   return (
-    <ConsentContext.Provider value={{
-      loading,
-      apiError,
-      refetchBackendData,
-      language,
-      setLanguage,
-      t,
-      INDIC_LANGUAGES,
-      dataPrincipal,
-      scenarios,
-      activeScenarioId,
-      currentScenario,
-      activeTab,
-      setActiveTab,
-      selectedAttributes,
-      toggleAttribute,
-      selectScenario,
-      grantCurrentConsent,
-      denyCurrentConsent,
-      revokeConsent,
-      activeConsents,
-      auditLogs,
-      nominee,
-      updateNominee,
-      dsrRequests,
-      submitErasureRequest,
-      submitCorrectionRequest,
-      nominationModalOpen,
-      setNominationModalOpen,
-      latestReceipt,
-      setLatestReceipt,
-      grievanceModalOpen,
-      setGrievanceModalOpen,
-      grievanceTarget,
-      setGrievanceTarget,
-      submitGrievance,
-      toastMessage,
-      resetToDefaults
-    }}>
+    <ConsentContext.Provider value={value}>
       {children}
     </ConsentContext.Provider>
   );
 };
 
-export const useConsent = () => useContext(ConsentContext);
+export const useConsent = () => {
+  const context = useContext(ConsentContext);
+  if (!context) {
+    throw new Error('useConsent must be used within a ConsentProvider');
+  }
+  return context;
+};

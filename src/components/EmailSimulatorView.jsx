@@ -84,25 +84,25 @@ export const EmailSimulatorView = () => {
             <div className="email-field-row">
               <span className="email-field-label">From:</span>
               <span className="email-field-val">
-                <strong>{currentScenario.fiduciary}</strong> &lt;{currentScenario.fiduciaryEmail}&gt;
+                {currentScenario.emailSnapshot?.from || `${currentScenario.fiduciary} <${currentScenario.fiduciaryEmail}>`}
               </span>
             </div>
             <div className="email-field-row">
               <span className="email-field-label">To:</span>
               <span className="email-field-val">
-                <strong>{dataPrincipal.name}</strong> &lt;{dataPrincipal.email}&gt;
+                {currentScenario.emailSnapshot?.to || `${dataPrincipal.name} <${dataPrincipal.email}>`}
               </span>
             </div>
             <div className="email-field-row">
               <span className="email-field-label">Subject:</span>
               <span className="email-field-val" style={{ fontWeight: 700, color: '#60a5fa' }}>
-                {currentScenario.emailSubject}
+                {currentScenario.emailSnapshot?.subject || currentScenario.emailSubject || currentScenario.purpose || "Consent Request Notice"}
               </span>
             </div>
             <div className="email-field-row">
               <span className="email-field-label">Date:</span>
               <span className="email-field-val" style={{ color: 'var(--text-muted)' }}>
-                {currentScenario.emailSnapshot?.date || "Monday, August 24, 2026"}
+                {currentScenario.emailSnapshot?.date || "Monday, August 31, 2026"}
               </span>
             </div>
             <div className="email-field-row">
@@ -118,17 +118,17 @@ export const EmailSimulatorView = () => {
                   border: `1px solid ${consentStateBadge.border}`, 
                   color: consentStateBadge.color,
                   fontSize: '0.78rem',
-                  fontWeight: 700
+                  fontWeight: 600
                 }}>
                   {consentStateBadge.icon}
-                  {consentStateBadge.label}
+                  <span>{consentStateBadge.label}</span>
                 </span>
               </span>
             </div>
           </div>
 
           <div className="email-body-text" style={{ whiteSpace: 'pre-line' }}>
-            {currentScenario.emailBody}
+            {currentScenario.emailSnapshot?.body || currentScenario.emailBody || currentScenario.purpose}
           </div>
 
           {/* Attachment Metadata Section */}

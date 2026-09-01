@@ -186,6 +186,7 @@ def seed_db(cursor):
     dp1_id = generate_data_principal_id("ananya.sharma@delhiuniv.ac.in")
     dp2_id = generate_data_principal_id("priya.nair@delhiuniv.ac.in")
     dp3_id = generate_data_principal_id("rahul.verma@delhiuniv.ac.in")
+    dp4_id = generate_data_principal_id("pandeyprerna1407@gmail.com")
 
     cursor.executemany("""
     INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
@@ -193,7 +194,8 @@ def seed_db(cursor):
     """, [
         (dp1_id, "Ananya Sharma", "ananya.sharma@delhiuniv.ac.in", "+91 98765 43210", "2023-CS-1049", "Delhi Technological University", "Verified", "2025-08-15"),
         (dp2_id, "Priya Nair", "priya.nair@delhiuniv.ac.in", "+91 98123 45678", "2023-EC-3011", "Delhi Technological University", "Verified", "2025-08-20"),
-        (dp3_id, "Rahul Verma", "rahul.verma@delhiuniv.ac.in", "+91 98112 99887", "2023-EE-2014", "Delhi Technological University", "Verified", "2025-09-01")
+        (dp3_id, "Rahul Verma", "rahul.verma@delhiuniv.ac.in", "+91 98112 99887", "2023-EE-2014", "Delhi Technological University", "Verified", "2025-09-01"),
+        (dp4_id, "Prerna Pandey", "pandeyprerna1407@gmail.com", "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", "2026-08-31")
     ])
 
     cursor.executemany("""
@@ -202,7 +204,8 @@ def seed_db(cursor):
     """, [
         ("ES-2026-CTPC-001", "Central Training & Placement Cell (CTPC) <placements@dtu.ac.in>", "Ananya Sharma <ananya.sharma@delhiuniv.ac.in>", "ACTION REQUIRED: Grant Data Consent for Campus Placement Drive 2026", "Monday, August 24, 2026", "Dear Ananya Sharma,\n\nThe Central Training & Placement Cell (CTPC) requires your explicit consent to process your academic records and resume for the upcoming Campus Recruitment Drive 2026.\n\nUnder the Digital Personal Data Protection (DPDP) Act, you have full granular control to select which data points you wish to share with partner recruiters.\n\nPlease click the button below to review the Privacy Notice and configure your consent choices on the official Data Principal Consent Portal.", "Statutory_Privacy_Notice_NTC-2026-CTPC-881.pdf", "1.4 MB", "DKIM Signed", "SPF Pass"),
         ("ES-2026-HESB-002", "Higher Education Scholarship Board (HESB) <nodal-scholarship@gov.in>", "Priya Nair <priya.nair@delhiuniv.ac.in>", "Consent Notice: Verification of Records for National Merit Scholarship 2026", "Friday, August 21, 2026", "Dear Priya Nair,\n\nYour application for the National Merit Scholarship 2026 has passed initial screening.\n\nTo proceed with bank disbursement, the Higher Education Scholarship Board requires your digital consent to verify your financial and academic documents. You can grant or restrict access to specific attributes.", "Statutory_Privacy_Notice_NTC-2026-HESB-409.pdf", "1.2 MB", "DKIM Signed", "SPF Pass"),
-        ("ES-2026-HEALTH-003", "DTU Campus Wellness Center <health-wellness@dtu.ac.in>", "Rahul Verma <rahul.verma@delhiuniv.ac.in>", "Health Center Notice: Annual Student Wellness & Emergency Contact Consent", "Wednesday, August 19, 2026", "Dear Rahul Verma,\n\nThe Campus Wellness Center is updating emergency response records. Please review the consent notice to allow access to your blood group and emergency contact info.", "Statutory_Privacy_Notice_NTC-2026-HEALTH-112.pdf", "1.1 MB", "DKIM Signed", "SPF Pass")
+        ("ES-2026-HEALTH-003", "DTU Campus Wellness Center <health-wellness@dtu.ac.in>", "Rahul Verma <rahul.verma@delhiuniv.ac.in>", "Health Center Notice: Annual Student Wellness & Emergency Contact Consent", "Wednesday, August 19, 2026", "Dear Rahul Verma,\n\nThe Campus Wellness Center is updating emergency response records. Please review the consent notice to allow access to your blood group and emergency contact info.", "Statutory_Privacy_Notice_NTC-2026-HEALTH-112.pdf", "1.1 MB", "DKIM Signed", "SPF Pass"),
+        ("ES-2026-CIALFOR-004", "Prerna Pandey <prerna.p@cialfor.com>", "Prerna Pandey <pandeyprerna1407@gmail.com>", "Recruitment & Placement Data Processing", "Monday, August 31, 2026", "Dear Data Principal,\n\nWe request your consent to access and process certain documents and personal information for the purpose of campus recruitment and placement activities.\n\n1. Purpose of Processing\nYour information will be used for:\n • Evaluating your eligibility for recruitment opportunities\n • Sharing your profile with relevant participating recruiters\n • Shortlisting candidates for interviews and recruitment processes\n • Verifying academic qualifications and other eligibility criteria\n • Coordinating interview and placement-related communication\n\n2. Documents & Data Requested\nDepending on your consent selection, we may request access to:\n • Resume / CV\n • Academic marksheets and CGPA\n • Degree / educational certificates\n • Student identification details\n • Institutional email address\n • Mobile phone number\n • Backlog / arrears information\n\nThanks & Regards,\nPrerna Pandey\nAI Specialist\nCialfor Research Labs Private Limited", "Statutory_Privacy_Notice_NTC-2026-CIALFOR-001.pdf", "1.2 MB", "DKIM Signed", "SPF Pass")
     ])
 
     attrs_ctpc = json.dumps([

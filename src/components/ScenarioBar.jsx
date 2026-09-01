@@ -3,7 +3,8 @@ import { useConsent } from '../context/ConsentContext';
 import { ShieldCheck, ArrowRight } from 'lucide-react';
 
 export const ScenarioBar = () => {
-  const { scenarios, activeScenarioId, selectScenario, t } = useConsent();
+  const { scenarios, activeScenarioId, switchScenario, selectScenario, t } = useConsent();
+  const handleSelect = selectScenario || switchScenario;
 
   return (
     <div className="scenario-bar">
@@ -22,7 +23,7 @@ export const ScenarioBar = () => {
           <button
             key={scen.id}
             className={`scenario-pill-btn ${activeScenarioId === scen.id ? 'active' : ''}`}
-            onClick={() => selectScenario(scen.id, 'email-sim')}
+            onClick={() => handleSelect(scen.id)}
           >
             <span>{scen.fiduciaryLogo}</span>
             <span>{scen.title}</span>

@@ -37,3 +37,12 @@ class ConsentRequestCreatePayload(BaseModel):
     email_subject: str
     email_body: str
     attachment_name: Optional[str] = "Statutory_Privacy_Notice.pdf"
+
+class EmailIngestPayload(BaseModel):
+    from_address: Optional[str] = "Prerna Pandey <prerna.p@cialfor.com>"
+    to_address: str
+    subject: str
+    body_text: str
+    purpose: Optional[str] = None
+    fiduciary_name: Optional[str] = "Cialfor Research Labs Private Limited"
+

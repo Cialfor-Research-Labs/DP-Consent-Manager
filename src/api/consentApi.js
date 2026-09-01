@@ -8,6 +8,26 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export const consentApi = {
   /**
+   * Ingest any custom email subject & body text into backend database
+   * POST /api/ingest-email
+   */
+  async ingestEmail(payload) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/ingest-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e) {
+      console.warn('Backend email ingestion offline:', e.message);
+    }
+    return null;
+  },
+
+  /**
    * Fetch all consent requests from backend
    * GET /api/consent-requests
    */
@@ -43,9 +63,11 @@ export const consentApi = {
    * Fetch consent request by path token or ID
    * GET /api/consent-requests/{requestToken}
    */
-  async getConsentRequestByToken(requestToken) {
+  async getConsentRequestByToken(requestToken, queryParams = {}) {
     try {
-      const response = await fetch(`${API_BASE_URL}/consent-requests/${encodeURIComponent(requestToken)}`);
+      const qs = new URLSearchParams(queryParams).toString();
+      const url = `${API_BASE_URL}/consent-requests/${encodeURIComponent(requestToken)}${qs ? '?' + qs : ''}`;
+      const response = await fetch(url);
       if (response.ok) {
         return await response.json();
       }

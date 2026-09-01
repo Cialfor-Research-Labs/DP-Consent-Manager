@@ -55,7 +55,12 @@ export const ConsentDecisionHub = () => {
       {/* Top Banner */}
       <div className="page-banner">
         <div className="banner-content">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+            {currentScenario.domain && (
+              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', fontWeight: 700 }}>
+                {currentScenario.domain} Sector
+              </span>
+            )}
             <span className="badge badge-notice">{t('noticeId')}: {currentScenario.noticeId}</span>
             <span className="badge badge-verified">
               <CheckCircle2 size={13} /> {t('dpdpVerified')}
@@ -146,6 +151,11 @@ export const ConsentDecisionHub = () => {
                     <div className="attribute-info">
                       <h4>
                         {attr.name}
+                        {attr.category && (
+                          <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '6px', fontWeight: 700, marginLeft: '8px' }}>
+                            {attr.category}
+                          </span>
+                        )}
                         {attr.required && <span className="tag-required">{t('mandatoryBadge')}</span>}
                         {attr.sensitive && <span className="tag-sensitive">{t('sensitiveBadge')}</span>}
                       </h4>

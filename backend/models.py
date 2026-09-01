@@ -21,14 +21,15 @@ class DSRRequestPayload(BaseModel):
 
 class ConsentRequestCreatePayload(BaseModel):
     fiduciary_name: str
-    fiduciary_category: Optional[str] = "Educational Institution"
-    fiduciary_logo: Optional[str] = "🎓"
+    fiduciary_category: Optional[str] = "Corporate Fiduciary"
+    fiduciary_logo: Optional[str] = "🏢"
     fiduciary_email: str
     dpo_name: Optional[str] = "Data Protection Officer"
     dpo_email: Optional[str] = "dpo@example.com"
     principal_name: str
     principal_email: str
     purpose: str
+    domain: Optional[str] = "Corporate/Enterprise"
     notice_id: Optional[str] = None
     legal_basis: Optional[str] = "Consent under DPDP Act 2023 (Section 6)"
     validity_period: Optional[str] = "12 Months"
@@ -44,5 +45,6 @@ class EmailIngestPayload(BaseModel):
     subject: str
     body_text: str
     purpose: Optional[str] = None
-    fiduciary_name: Optional[str] = "Cialfor Research Labs Private Limited"
+    domain: Optional[str] = None
+    fiduciary_name: Optional[str] = None
 

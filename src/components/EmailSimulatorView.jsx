@@ -1,9 +1,10 @@
 import React from 'react';
 import { useConsent } from '../context/ConsentContext';
+import { translateEmailBody } from '../i18n/translations';
 import { Mail, ArrowRight, ShieldCheck, ShieldAlert, CheckCircle2, Lock, Paperclip, FileText, BadgeCheck } from 'lucide-react';
 
 export const EmailSimulatorView = () => {
-  const { currentScenario, dataPrincipal, setActiveTab, activeConsents, auditLogs } = useConsent();
+  const { currentScenario, dataPrincipal, setActiveTab, activeConsents, auditLogs, language } = useConsent();
 
   // Find if consent decision has already been recorded for this scenario notice
   const matchingConsent = activeConsents.find(c => c.noticeId === currentScenario.noticeId);
@@ -128,7 +129,11 @@ export const EmailSimulatorView = () => {
           </div>
 
           <div className="email-body-text" style={{ whiteSpace: 'pre-line' }}>
-            {currentScenario.emailSnapshot?.body || currentScenario.emailBody || currentScenario.purpose}
+            {translateEmailBody(
+              currentScenario.emailSnapshot?.body || currentScenario.emailBody || currentScenario.purpose,
+              language,
+              dataPrincipal.name
+            )}
           </div>
 
           {/* Attachment Metadata Section */}

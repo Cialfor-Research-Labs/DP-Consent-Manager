@@ -145,7 +145,7 @@ export const DataRightsView = () => {
           <form onSubmit={handleErasureSubmit}>
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                Select Target Data Fiduciary:
+                {t('selectFiduciaryLabel')}
               </label>
               <select 
                 className="btn-secondary"
@@ -164,7 +164,7 @@ export const DataRightsView = () => {
 
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                Erasure Scope:
+                {t('erasureScopeLabel')}
               </label>
               <select 
                 className="btn-secondary"
@@ -172,7 +172,7 @@ export const DataRightsView = () => {
                 value={erasureScope}
                 onChange={(e) => setErasureScope(e.target.value)}
               >
-                <option value="COMPLETE_PURGE">Complete Purge (Delete all student profile, scores & contact records)</option>
+                <option value="COMPLETE_PURGE">Complete Purge (Delete all profile, scores & contact records)</option>
                 <option value="OPTIONAL_ATTRIBUTES_ONLY">Selective Erasure (Erase optional attributes & retain mandatory records)</option>
                 <option value="LOGS_AND_METADATA">Audit Metadata & Session Log Deletion</option>
               </select>
@@ -180,14 +180,14 @@ export const DataRightsView = () => {
 
             <div style={{ marginBottom: '28px' }}>
               <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                Statutory Reason / Basis for Erasure Request:
+                {t('erasureReasonLabel')}
               </label>
               <textarea 
                 className="btn-secondary"
                 style={{ width: '100%', height: '100px', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', resize: 'none' }}
                 value={erasureReason}
                 onChange={(e) => setErasureReason(e.target.value)}
-                placeholder="e.g. Consent withdrawn under Sec 6(4). Placement drive 2026 completed."
+                placeholder="e.g. Consent withdrawn under Sec 6(4). Service registration completed."
                 required
               />
             </div>
@@ -195,14 +195,14 @@ export const DataRightsView = () => {
             <div style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', padding: '16px 20px', borderRadius: '12px', marginBottom: '28px', fontSize: '0.85rem', color: '#fca5a5', display: 'flex', gap: '12px' }}>
               <AlertCircle size={22} style={{ flexShrink: 0, marginTop: '2px' }} />
               <div>
-                <strong>Legal Impact (Sec 12(3)):</strong> Upon receipt of this request, the Data Fiduciary is required by law to erase personal data and instruct its third-party data processors to execute data purging within the statutory SLA (30 days).
+                {t('legalImpactDisclaimer')}
               </div>
             </div>
 
             <div style={{ textAlign: 'right' }}>
               <button type="submit" className="btn btn-danger" style={{ padding: '14px 28px', fontSize: '0.95rem' }}>
                 <Send size={18} />
-                Submit Statutory Erasure Request (Sec 12)
+                {t('submitErasureBtn')}
               </button>
             </div>
           </form>
@@ -247,7 +247,7 @@ export const DataRightsView = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                  Data Attribute to Correct:
+                  {t('attributeToCorrectLabel')}
                 </label>
                 <input 
                   type="text"
@@ -262,7 +262,7 @@ export const DataRightsView = () => {
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                  Current (Inaccurate) Value:
+                  {t('currentInaccurateLabel')}
                 </label>
                 <input 
                   type="text"
@@ -278,7 +278,7 @@ export const DataRightsView = () => {
 
             <div style={{ marginBottom: '20px' }}>
               <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                New Corrected Value:
+                {t('newCorrectedLabel')}
               </label>
               <input 
                 type="text"
@@ -293,7 +293,7 @@ export const DataRightsView = () => {
 
             <div style={{ marginBottom: '28px' }}>
               <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                Reason for Correction / Supporting Proof Details:
+                {t('correctionReasonLabel')}
               </label>
               <textarea 
                 className="btn-secondary"
@@ -308,7 +308,7 @@ export const DataRightsView = () => {
             <div style={{ textAlign: 'right' }}>
               <button type="submit" className="btn btn-primary" style={{ padding: '14px 28px', fontSize: '0.95rem' }}>
                 <Send size={18} />
-                Submit Data Correction Ticket (Sec 11)
+                {t('submitCorrectionBtn')}
               </button>
             </div>
           </form>

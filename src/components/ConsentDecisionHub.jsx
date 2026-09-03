@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useConsent } from '../context/ConsentContext';
+import { translatePurpose, translateAttributeName, translateAttributeDesc } from '../i18n/translations';
 import { 
   Shield, 
   CheckCircle2, 
@@ -22,6 +23,7 @@ export const ConsentDecisionHub = () => {
     denyCurrentConsent, 
     setGrievanceModalOpen, 
     setGrievanceTarget,
+    language,
     t 
   } = useConsent();
 
@@ -110,7 +112,7 @@ export const ConsentDecisionHub = () => {
               <FileText size={16} /> {t('specifiedPurpose')}
             </div>
             <div className="purpose-box-desc">
-              {currentScenario.purpose}
+              {translatePurpose(currentScenario.purpose, language)}
             </div>
           </div>
 
@@ -150,7 +152,7 @@ export const ConsentDecisionHub = () => {
                     </div>
                     <div className="attribute-info">
                       <h4>
-                        {attr.name}
+                        {translateAttributeName(attr.name, language)}
                         {attr.category && (
                           <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '6px', fontWeight: 700, marginLeft: '8px' }}>
                             {attr.category}
@@ -159,7 +161,7 @@ export const ConsentDecisionHub = () => {
                         {attr.required && <span className="tag-required">{t('mandatoryBadge')}</span>}
                         {attr.sensitive && <span className="tag-sensitive">{t('sensitiveBadge')}</span>}
                       </h4>
-                      <p>{attr.description}</p>
+                      <p>{translateAttributeDesc(attr.description, language)}</p>
                     </div>
                   </div>
 

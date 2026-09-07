@@ -241,12 +241,6 @@ export const ConsentDecisionHub = () => {
               </span>
             </div>
 
-            <div className="info-row">
-              <span className="info-label">{t('dpoOfficer')}</span>
-              <span className="info-value" style={{ marginTop: '2px' }}>{currentScenario.dpoName}</span>
-              <span style={{ fontSize: '0.82rem', color: '#94a3b8', marginTop: '2px' }}>{currentScenario.dpoEmail}</span>
-            </div>
-
             <div className="info-row" style={{ borderBottom: 'none' }}>
               <span className="info-label">{t('rightToRevoke')}</span>
               <span style={{ fontSize: '0.85rem', color: '#cbd5e1', lineHeight: '1.55', marginTop: '4px' }}>

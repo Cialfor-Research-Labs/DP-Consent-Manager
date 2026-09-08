@@ -112,6 +112,273 @@ def check_request_expiry(req, conn):
         print("Expiry parse check error:", e)
     return False
 
+# ── UNIVERSAL EMAIL CONTENT ANALYSER ──────────────────────────────────────────
+# These three functions replace all hardcoded domain/template logic.
+# They read the ACTUAL email subject + body to determine:
+#   1. Business domain/sector
+#   2. Processing purpose
+#   3. Which personal data attributes are being requested
+# ──────────────────────────────────────────────────────────────────────────────
+
+def detect_domain_from_content(subject: str, body: str) -> str:
+    """Detect the business domain/sector from actual email subject + body text."""
+    text = (subject + " " + body).lower()
+    if any(kw in text for kw in ["hospital", "medical", "health insurance", "diagnosis", "prescription", "lab report", "clinic", "doctor", "patient", "treatment", "mediclam"]):
+        return "Healthcare"
+    if any(kw in text for kw in ["loan", "cibil", "lending", "credit line", "emi", "fintech", "nbfc", "credit score", "borrower", "disburse"]):
+        return "FinTech"
+    if any(kw in text for kw in ["uan", "provident fund", "epfo", "pf account", "payroll", "esic", "gratuity", "employee provident"]):
+        return "EPFO / Payroll"
+    if any(kw in text for kw in ["savings account", "fixed deposit", "neft", "rtgs", "rbi guideline", "banking", "demat", "current account"]):
+        return "Banking"
+    if any(kw in text for kw in ["background verification", "bgv", "degree verification", "employment onboarding", "hr department", "hiring", "experience letter", "relieving letter"]):
+        return "Corporate HR"
+    if any(kw in text for kw in ["order", "shipping", "delivery address", "ecommerce", "checkout", "cart", "retail"]):
+        return "E-Commerce"
+    if any(kw in text for kw in ["insurance policy", "premium", "tpa", "claim settlement", "insurance coverage"]):
+        return "Insurance"
+    if any(kw in text for kw in ["school", "college", "university", "student", "admission", "education loan", "scholarship"]):
+        return "Education"
+    if any(kw in text for kw in ["gst", "income tax", "government scheme", "ministry", "ration card", "voter id"]):
+        return "Government"
+    if any(kw in text for kw in ["bank", "account", "kyc", "ifsc"]):
+        return "Banking"
+    return "Corporate / Enterprise"
+
+
+def extract_purpose_from_content(subject: str, body: str) -> str:
+    """Extract a meaningful processing purpose directly from the email content."""
+    if subject:
+        cleaned = subject.strip()
+        for prefix in ["action required:", "re:", "fw:", "fwd:", "important:", "urgent:", "notice:"]:
+            if cleaned.lower().startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+        if len(cleaned) > 10:
+            return cleaned
+    if body:
+        lines = [l.strip() for l in body.split('\n') if l.strip() and len(l.strip()) > 20]
+        for line in lines:
+            low = line.lower()
+            if not low.startswith("dear") and not low.startswith("hi ") and not low.startswith("hello") and "unsubscribe" not in low:
+                return line[:200]
+    return "Collection and processing of personal data for requested service delivery."
+
+
+def resolve_fiduciary_name(token: str = "", domain: str = "", subject: str = "", body: str = "", fiduciary: str = "") -> str:
+    """
+    Resolve institutional Data Fiduciary entity name under DPDP Act.
+    If the link/token or content is for a Bank (e.g. tok_bank_kyc, 'bank' in token, or domain is Banking),
+    it MUST show the Bank name (e.g. ABC National Bank, or named bank in text).
+    It will never use a personal individual's name as the Data Fiduciary.
+    """
+    token_lower = (token or "").lower()
+    text = f"{subject} {body}".lower()
+    fiduciary_clean = (fiduciary or "").strip()
+
+    # If an institutional organization was explicitly provided (and is not an individual person or email)
+    is_personal_name = any(p in fiduciary_clean.lower() for p in [
+        "prerna", "pandey", "@", "unknown", "data fiduciary", "test"
+    ])
+    if fiduciary_clean and not is_personal_name and len(fiduciary_clean) > 2:
+        return fiduciary_clean
+
+    # Detect specific real banks if mentioned in text
+    if any(kw in text for kw in ["hdfc bank", "hdfc"]):
+        return "HDFC Bank"
+    if any(kw in text for kw in ["icici bank", "icici"]):
+        return "ICICI Bank"
+    if any(kw in text for kw in ["state bank of india", "sbi"]):
+        return "State Bank of India"
+    if any(kw in text for kw in ["axis bank", "axis"]):
+        return "Axis Bank"
+    if any(kw in text for kw in ["kotak mahindra", "kotak bank", "kotak"]):
+        return "Kotak Mahindra Bank"
+    if any(kw in text for kw in ["punjab national bank", "pnb"]):
+        return "Punjab National Bank"
+    if any(kw in text for kw in ["bank of baroda", "bob"]):
+        return "Bank of Baroda"
+
+    # Banking link / domain check — ALWAYS use Bank name for banking links
+    if "bank" in token_lower or domain == "Banking" or any(kw in text for kw in ["savings account", "current account", "fixed deposit", "kyc verification", "rbi guideline", "bank account", "ifsc"]):
+        return "ABC National Bank"
+
+    # Healthcare
+    if "health" in token_lower or "med" in token_lower or domain == "Healthcare" or any(kw in text for kw in ["hospital", "clinic", "diagnosis", "mediclaim", "patient", "apollo"]):
+        return "Apollo Care Hospital"
+
+    # EPFO / PF
+    if "pf" in token_lower or "uan" in token_lower or "provident" in token_lower or domain == "EPFO / Payroll" or any(kw in text for kw in ["epfo", "provident fund", "uan"]):
+        return "EPFO / Cialfor Payroll Cell"
+
+    # FinTech / Loan
+    if "fintech" in token_lower or "loan" in token_lower or "credit" in token_lower or domain == "FinTech" or any(kw in text for kw in ["cibil", "lending", "credit score"]):
+        return "PayFlex Lending"
+
+    # E-Commerce
+    if "ecom" in token_lower or "order" in token_lower or "retail" in token_lower or domain == "E-Commerce":
+        return "ShopEase Retail"
+
+    # Corporate HR / BGV
+    if "bgv" in token_lower or "corp" in token_lower or "hr" in token_lower or domain == "Corporate HR" or any(kw in text for kw in ["background verification", "onboarding"]):
+        return "GlobalTech Solutions HR"
+
+    if domain and domain != "Corporate / Enterprise":
+        return f"{domain} Enterprise"
+
+    return "ABC National Bank" if "bank" in token_lower else "Corporate Fiduciary"
+
+
+def get_fiduciary_metadata(fiduciary_name: str, domain: str):
+    """Return category and emoji logo appropriate for the institutional fiduciary."""
+    name_low = fiduciary_name.lower()
+    domain_low = domain.lower()
+    if "bank" in name_low or "banking" in domain_low:
+        return "Banking & Financial Services", "🏦"
+    if "hospital" in name_low or "health" in name_low or "care" in name_low or "healthcare" in domain_low:
+        return "Healthcare & Diagnostic Services", "🏥"
+    if "epfo" in name_low or "payroll" in domain_low or "pf" in name_low:
+        return "Statutory & Government Payroll", "💼"
+    if "lending" in name_low or "fintech" in name_low or "fintech" in domain_low:
+        return "FinTech & Digital Lending", "💳"
+    if "retail" in name_low or "shopease" in name_low or "commerce" in domain_low:
+        return "E-Commerce & Retail Logistics", "🛒"
+    if "hr" in name_low or "globaltech" in name_low or "corporate" in domain_low:
+        return "Corporate HR & Recruitment", "🏢"
+    return f"{domain} Enterprise", "🏢"
+
+
+
+def extract_attributes_from_email_content(subject: str, body: str) -> list:
+    """
+    Universal DPDP-compliant attribute extractor.
+    Reads the actual email subject + body text and dynamically identifies
+    which personal data attributes are being requested.
+    Completely replaces the old hardcoded domain-template logic.
+    """
+    text = (subject + " " + body).lower()
+    attrs = []
+    added = set()
+
+    def add(attr_id, name, category, required, description, sensitive, default_granted=None):
+        if attr_id not in added:
+            a = {"id": attr_id, "name": name, "category": category,
+                 "required": required, "description": description, "sensitive": sensitive}
+            if default_granted is not None:
+                a["defaultGranted"] = default_granted
+            attrs.append(a)
+            added.add(attr_id)
+
+    # ── ALWAYS REQUIRED: Full Name ─────────────────────────────────────────────
+    add("attr_name", "Full Name & Official Identity", "IDENTITY", True,
+        "Official name of the Data Principal for identification and records", False)
+
+    # ── PAN CARD ──────────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["pan", "pan card", "permanent account number", "tax deduction", "form 60"]):
+        add("attr_pan", "Permanent Account Number (PAN Card)", "FINANCIAL", True,
+            "Government-issued tax identity document for financial compliance", True)
+
+    # ── AADHAAR / KYC ─────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["aadhaar", "aadhar", "uid number", "biometric", "e-kyc", "ekyc", "kyc", "uidai"]):
+        add("attr_aadhaar", "Aadhaar / Government KYC Document", "IDENTITY", True,
+            "UIDAI Aadhaar for mandatory KYC verification and identity proof", True)
+
+    # ── BANK ACCOUNT ──────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["bank account", "account number", "ifsc", "savings account", "current account", "neft", "rtgs", "upi id", "bank details"]):
+        add("attr_bank", "Bank Account Number & IFSC Code", "FINANCIAL", True,
+            "Bank account details for payment processing and fund transfer", True)
+
+    # ── BANK STATEMENT ────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["bank statement", "account statement", "6 month", "6-month", "bank passbook"]):
+        add("attr_bank_stmt", "Bank Account Statement (6 Months)", "FINANCIAL", True,
+            "Recent bank statement for income and transaction verification", True)
+
+    # ── CIBIL / CREDIT SCORE ──────────────────────────────────────────────────
+    if any(kw in text for kw in ["cibil", "credit score", "credit report", "experian", "equifax", "crif", "credit bureau"]):
+        add("attr_cibil", "Credit Score Report (CIBIL / Experian)", "FINANCIAL", True,
+            "Credit bureau score report for loan/credit eligibility assessment", True)
+
+    # ── UAN / PF / EPFO ───────────────────────────────────────────────────────
+    if any(kw in text for kw in ["uan", "universal account number", "provident fund", "pf account", "epfo", "employee provident"]):
+        add("attr_uan", "Universal Account Number (UAN) & PF ID", "FINANCIAL", True,
+            "EPFO UAN for Provident Fund account linking and management", True)
+
+    # ── MEDICAL / HEALTH ──────────────────────────────────────────────────────
+    if any(kw in text for kw in ["medical record", "health record", "diagnostic", "lab report", "prescription", "treatment history", "patient record"]):
+        add("attr_medical", "Medical Records & Diagnostic History", "HEALTH", True,
+            "Medical records required for healthcare service and insurance processing", True)
+
+    # ── HEALTH INSURANCE ──────────────────────────────────────────────────────
+    if any(kw in text for kw in ["health insurance", "insurance policy", "tpa", "cashless", "mediclaim", "policy number"]):
+        add("attr_insurance", "Health Insurance Policy Number", "HEALTH", True,
+            "Insurance policy details for cashless treatment and claim processing", True)
+
+    # ── ADDRESS ───────────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["address", "residential address", "home address", "delivery address", "shipping address", "pincode", "location proof"]):
+        add("attr_address", "Residential Address & Address Proof", "CONTACT", True,
+            "Home address for correspondence, KYC, and service delivery", False)
+
+    # ── PHONE NUMBER ──────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["phone", "mobile", "contact number", "telephone", "otp", "sms notification"]):
+        add("attr_phone", "Mobile Phone Number", "CONTACT", True,
+            "Contact number for OTP verification and communication", False)
+
+    # ── EMAIL ADDRESS ─────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["email address", "email id", "e-mail id"]):
+        add("attr_email_id", "Email Address", "CONTACT", True,
+            "Email for digital correspondence and account notifications", False)
+
+    # ── GOVERNMENT PHOTO ID ───────────────────────────────────────────────────
+    if any(kw in text for kw in ["passport", "voter id", "driving license", "government photo id", "photo id proof"]):
+        add("attr_govt_id", "Government Photo ID (Passport / Voter ID / DL)", "IDENTITY", True,
+            "Official government-issued photo identity document", True)
+
+    # ── EMPLOYMENT / BGV ──────────────────────────────────────────────────────
+    if any(kw in text for kw in ["background verification", "bgv", "criminal check", "police verification", "employment verification"]):
+        add("attr_bgv", "Background Verification & Criminal Record Check", "LEGAL/VERIFICATION", True,
+            "Third-party background check for employment onboarding clearance", True)
+
+    # ── DEGREE / EDUCATION ────────────────────────────────────────────────────
+    if any(kw in text for kw in ["degree", "marksheet", "academic certificate", "university registrar", "diploma"]):
+        add("attr_degree", "Educational Degree Certificates & Marksheets", "PROFESSIONAL", True,
+            "Academic qualification documents for credential verification", True)
+
+    # ── EXPERIENCE LETTER ─────────────────────────────────────────────────────
+    if any(kw in text for kw in ["experience letter", "relieving letter", "reference check", "prior employment", "work history"]):
+        add("attr_prior_emp", "Prior Employment & Experience Records", "PROFESSIONAL", False,
+            "Relieving letter and employment reference for background check", False, default_granted=True)
+
+    # ── INCOME / SALARY ───────────────────────────────────────────────────────
+    if any(kw in text for kw in ["salary slip", "income proof", "salary statement", "ctc", "annual income", "itr", "form 16"]):
+        add("attr_income", "Income Proof & Salary Records", "FINANCIAL", False,
+            "Income documentation for financial eligibility and tax verification", True, default_granted=True)
+
+    # ── PAYMENT CARD ──────────────────────────────────────────────────────────
+    if any(kw in text for kw in ["credit card", "debit card", "card details", "payment method", "express checkout", "tokenized card"]):
+        add("attr_card", "Tokenized Payment Card Details", "FINANCIAL", False,
+            "RBI-compliant tokenized card data for express payment checkout", True, default_granted=False)
+
+    # ── DEVICE / LOCATION ─────────────────────────────────────────────────────
+    if any(kw in text for kw in ["device", "location data", "gps", "ip address", "device fingerprint", "anti-fraud"]):
+        add("attr_device", "Device & Location Data", "DIGITAL", False,
+            "Device fingerprint and location for fraud prevention and security", True, default_granted=True)
+
+    # ── SUPPORTING DOCUMENTS ──────────────────────────────────────────────────
+    if any(kw in text for kw in ["supporting document", "records required", "proof required", "file upload", "attach document"]):
+        add("attr_docs", "Supporting Documents & Records", "LEGAL/VERIFICATION", False,
+            "Relevant supporting documents for requested service delivery", True, default_granted=True)
+
+    # ── FALLBACK: generic fields if nothing specific found ────────────────────
+    if len(attrs) <= 1:
+        add("attr_email_id", "Email Address", "CONTACT", True,
+            "Contact email for correspondence and account management", False)
+        add("attr_phone", "Mobile Phone Number", "CONTACT", True,
+            "Contact number for communication and OTP verification", False)
+        add("attr_docs", "Supporting Documents & Records", "LEGAL/VERIFICATION", False,
+            "Relevant documents for the requested service delivery", True, default_granted=True)
+
+    return attrs
+
+
 def dynamic_create_request_for_token(
     token: str, 
     conn, 
@@ -135,125 +402,30 @@ def dynamic_create_request_for_token(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """, (dp_id, dp_name, dp_email, "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", datetime.utcnow().isoformat() + "Z"))
 
-    token_lower = token.lower()
-    subject_lower = (subject or "").lower()
+    # ── UNIVERSAL EMAIL CONTENT ANALYSIS ─────────────────────────────────────
+    # Domain, purpose, and attributes are extracted from the ACTUAL email
+    # subject + body text. We no longer use token keywords to decide what
+    # to show. The real email content drives everything.
+    final_domain    = detect_domain_from_content(subject or "", body or "")
+    final_subject   = subject or "Action Required: Data Processing Consent Notice"
+    final_purpose   = purpose or extract_purpose_from_content(subject or "", body or "")
+    final_fiduciary = resolve_fiduciary_name(token, final_domain, subject or "", body or "", fiduciary or "")
+    final_category, final_logo = get_fiduciary_metadata(final_fiduciary, final_domain)
 
-    # Determine Domain & Categories
-    if "bank" in token_lower or "kyc" in token_lower or "bank" in subject_lower:
-        final_domain = "Banking"
-        final_subject = subject or "Action Required: Digital Consent for Savings Account Opening & KYC Verification"
-        final_purpose = purpose or "Account Opening & Digital KYC Verification under RBI Guidelines"
-        final_fiduciary = fiduciary or "ABC National Bank"
-        final_body = body or (
-            f"Dear {dp_name},\n\n"
-            "As part of RBI Mandatory KYC Guidelines and DPDP Act 2023 compliance, ABC National Bank requests your explicit digital consent to verify your Government Identity Proof, PAN Card, and Address details.\n\n"
-            "Thanks & Regards,\nABC Bank KYC Compliance Cell"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Full Legal Name", "category": "IDENTITY", "required": True, "description": "Legal name matching Aadhaar & PAN card", "sensitive": False},
-            {"id": "attr_govt_id", "name": "Government Photo ID (Aadhaar / Passport)", "category": "IDENTITY", "required": True, "description": "Official government identity proof for RBI KYC", "sensitive": True},
-            {"id": "attr_pan", "name": "Permanent Account Number (PAN Card)", "category": "FINANCIAL", "required": True, "description": "Tax ID for banking transactions and Form 60 verification", "sensitive": True},
-            {"id": "attr_address", "name": "Residential Address Proof", "category": "CONTACT", "required": True, "description": "Utility bill or Aadhaar address for communication", "sensitive": False},
-            {"id": "attr_income", "name": "Annual Income & Occupation Declaration", "category": "FINANCIAL", "required": False, "description": "Optional income declaration for debit card limits", "sensitive": True, "defaultGranted": True}
-        ]
-    elif "health" in token_lower or "med" in token_lower or "health" in subject_lower:
-        final_domain = "Healthcare"
-        final_subject = subject or "Healthcare Privacy Notice: Consent for Diagnostic Records & Health Insurance Processing"
-        final_purpose = purpose or "Diagnostic Test Report Sharing & Cashless Health Insurance Claim Settlement"
-        final_fiduciary = fiduciary or "Apollo Care Hospital"
-        final_body = body or (
-            f"Dear {dp_name},\n\n"
-            "Apollo Care Hospital requires your consent to share diagnostic test reports and medical history with your empaneled Health Insurance Provider for cashless claim processing.\n\n"
-            "Thanks & Regards,\nApollo Care Privacy Officer"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Patient Full Name & DOB", "category": "IDENTITY", "required": True, "description": "Patient identity matching hospital registration", "sensitive": False},
-            {"id": "attr_medical", "name": "Medical Diagnostic Reports & Lab History", "category": "HEALTH", "required": True, "description": "Diagnostic reports required for health insurance claim processing", "sensitive": True},
-            {"id": "attr_insurance", "name": "Health Insurance Policy Number", "category": "HEALTH", "required": True, "description": "TPA insurance card number for cashless hospital approval", "sensitive": True},
-            {"id": "attr_contact", "name": "Emergency Contact & Next of Kin", "category": "CONTACT", "required": False, "description": "Phone number of emergency contact person", "sensitive": False, "defaultGranted": True}
-        ]
-    elif "fintech" in token_lower or "loan" in token_lower or "credit" in token_lower or "loan" in subject_lower:
-        final_domain = "FinTech"
-        final_subject = subject or "FinTech Notice: Consent for Credit Score & Bank Statement Analysis"
-        final_purpose = purpose or "Credit Score Assessment & Bank Statement Verification for Instant Credit Line"
-        final_fiduciary = fiduciary or "PayFlex Lending"
-        final_body = body or (
-            f"Dear {dp_name},\n\n"
-            "To evaluate your instant credit line application, PayFlex Lending requests consent to fetch your CIBIL Credit Score and verify recent 6-month bank statements.\n\n"
-            "Thanks & Regards,\nPayFlex Lending Underwriting Team"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Borrower Full Name", "category": "IDENTITY", "required": True, "description": "Name matching credit bureau records", "sensitive": False},
-            {"id": "attr_cibil", "name": "CIBIL / Experian Credit Score Report", "category": "FINANCIAL", "required": True, "description": "Credit bureau score for instant loan approval", "sensitive": True},
-            {"id": "attr_bank_stmt", "name": "6-Month Bank Account Statement", "category": "FINANCIAL", "required": True, "description": "Bank statement PDF for income verification", "sensitive": True},
-            {"id": "attr_device", "name": "Device & Location Fingerprint", "category": "DIGITAL", "required": False, "description": "Anti-fraud device location check for instant disbursement", "sensitive": True, "defaultGranted": True}
-        ]
-    elif "ecom" in token_lower or "order" in token_lower or "retail" in token_lower:
-        final_domain = "E-Commerce"
-        final_subject = subject or "E-Commerce Notice: Consent for Order Delivery & Saved Payment Method Processing"
-        final_purpose = purpose or "Order Fulfillment, Address Verification & Tokenized Express Checkout"
-        final_fiduciary = fiduciary or "ShopEase Retail"
-        final_body = body or (
-            f"Dear {dp_name},\n\n"
-            "ShopEase Retail requests your consent to store shipping address details and tokenized payment card information for fast checkout and delivery updates.\n\n"
-            "Thanks & Regards,\nShopEase Customer Trust Team"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Customer Full Name", "category": "IDENTITY", "required": True, "description": "Name for order invoice and package delivery", "sensitive": False},
-            {"id": "attr_address", "name": "Shipping & Delivery Address", "category": "CONTACT", "required": True, "description": "Physical delivery location for courier partners", "sensitive": False},
-            {"id": "attr_phone", "name": "Mobile Phone Number", "category": "CONTACT", "required": True, "description": "SMS delivery updates and courier OTP verification", "sensitive": False},
-            {"id": "attr_card", "name": "Tokenized Payment Card Details", "category": "FINANCIAL", "required": False, "description": "RBI compliant tokenized card data for 1-click checkout", "sensitive": True, "defaultGranted": False}
-        ]
-    elif "bgv" in token_lower or "corp" in token_lower or "employment" in token_lower:
-        final_domain = "Corporate HR"
-        final_subject = subject or "Corporate HR Notice: Background Verification & Employment Record Clearance"
-        final_purpose = purpose or "Employee Background Verification & Degree Credentials Clearance"
-        final_fiduciary = fiduciary or "GlobalTech Solutions"
-        final_body = body or (
-            f"Dear {dp_name},\n\n"
-            "As part of your employment onboarding, GlobalTech HR requests consent to process your background verification, degree certificates, and prior employment reference checks.\n\n"
-            "Thanks & Regards,\nGlobalTech Onboarding HR"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Employee Full Name", "category": "IDENTITY", "required": True, "description": "Official employee onboarding name", "sensitive": False},
-            {"id": "attr_bgv", "name": "Background Verification & Criminal Check", "category": "LEGAL/VERIFICATION", "required": True, "description": "Third-party agency background check report", "sensitive": True},
-            {"id": "attr_degree", "name": "Degree Certificates & Marksheets", "category": "PROFESSIONAL", "required": True, "description": "Educational degree verification from university registrar", "sensitive": True},
-            {"id": "attr_prior_emp", "name": "Prior Employment Experience Letter", "category": "PROFESSIONAL", "required": False, "description": "Relieving letter and HR reference check", "sensitive": False, "defaultGranted": True}
-        ]
-    elif "pf" in token_lower or "provident" in token_lower:
-        final_domain = "Corporate HR"
-        final_subject = subject or "Action Required: Consent for PF Account Processing"
-        final_purpose = purpose or "Collection and processing of personal data for PF (Provident Fund) account registration, UAN linking, and statutory compliance under EPFO guidelines."
-        final_fiduciary = fiduciary or "Cialfor Research Labs Private Limited (HR & Payroll Cell)"
-        final_body = body or (
-            f"Dear {dp_name},\n\n"
-            "As part of our PF (Provident Fund) account processing and related statutory requirements, we are required to collect and process certain personal information.\n\n"
-            "Thanks & Regards,\nPrerna Pandey\nAI Specialist\nCialfor Research Labs Private Limited"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Full Legal Name & Employee ID", "category": "IDENTITY", "required": True, "description": "Official name and employee ID for EPFO records", "sensitive": False},
-            {"id": "attr_uan", "name": "Universal Account Number (UAN) & PF ID", "category": "FINANCIAL", "required": True, "description": "EPFO UAN for Provident Fund account linking", "sensitive": True},
-            {"id": "attr_pan", "name": "Permanent Account Number (PAN Card)", "category": "FINANCIAL", "required": True, "description": "Tax identity verification for PF contribution tax exemption", "sensitive": True},
-            {"id": "attr_bank", "name": "Bank Account Number & IFSC Code", "category": "FINANCIAL", "required": True, "description": "Direct bank account for PF withdrawal/transfer credit", "sensitive": True},
-            {"id": "attr_kyc", "name": "Aadhaar / Government KYC Document", "category": "IDENTITY", "required": True, "description": "EPFO mandatory e-KYC biometric identity verification", "sensitive": True}
-        ]
-    else:
-        final_domain = "Corporate/Enterprise"
-        final_subject = subject or "Action Required: Digital Data Processing Consent Notice"
-        final_purpose = purpose or "Collection and processing of personal data for statutory and organizational requirements."
-        final_fiduciary = fiduciary or "Cialfor Research Labs Private Limited"
-        final_body = body or (
-            f"Dear {dp_name},\n\n"
-            f"We request your explicit consent for processing your personal data for: {final_purpose}\n\n"
-            "Kindly review the requested data attributes and statutory terms on the Consent Manager Portal.\n\n"
-            "Thanks & Regards,\nCialfor Privacy Compliance Officer"
-        )
-        requested_attrs = [
-            {"id": "attr_name", "name": "Full Name & Official Identity", "category": "IDENTITY", "required": True, "description": "Official name of Data Principal", "sensitive": False},
-            {"id": "attr_email", "name": "Email Address", "category": "CONTACT", "required": True, "description": "Contact email address", "sensitive": False},
-            {"id": "attr_phone", "name": "Mobile Phone Number", "category": "CONTACT", "required": True, "description": "Direct mobile contact number", "sensitive": False},
-            {"id": "attr_documents", "name": "Supporting Documents / Records", "category": "LEGAL/VERIFICATION", "required": False, "description": "Specific records requested for service delivery", "sensitive": True, "defaultGranted": True}
-        ]
+    # CRITICAL: Always use the real email body as-is.
+    # Only fall back to a generic template if no body was provided at all.
+    final_body = body or (
+        f"Dear {dp_name},\n\n"
+        f"We request your explicit consent to process your personal data for:\n{final_purpose}\n\n"
+        "Please review the requested data attributes on this Consent Manager Portal "
+        "and grant or deny consent accordingly.\n\n"
+        "Thanks & Regards,\nPrivacy Compliance Officer"
+    )
+
+    # Dynamically extract attributes from the actual email content
+    requested_attrs = extract_attributes_from_email_content(
+        subject or "", body or ""
+    )
 
     # 2. Create EmailSnapshot
     snapshot_id = f"ES-2026-CIALFOR-{random.randint(1000, 9999)}"
@@ -262,7 +434,7 @@ def dynamic_create_request_for_token(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         snapshot_id,
-        f"{final_fiduciary} <prerna.p@cialfor.com>",
+        f"{final_fiduciary} <compliance@{final_domain.lower().replace(' ', '').replace('/', '')}.com>",
         f"{dp_name} <{dp_email}>",
         final_subject,
         datetime.utcnow().strftime("%A, %B %d, %Y"),
@@ -289,8 +461,8 @@ def dynamic_create_request_for_token(
         dp_id,
         snapshot_id,
         final_fiduciary,
-        f"{final_domain} Fiduciary",
-        "🏢",
+        final_category,
+        final_logo,
         "privacy@cialfor.com",
         "Prerna Pandey (AI Specialist)",
         "dpo@cialfor.com",
@@ -334,25 +506,44 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
         dp_email = payload.to_address.strip()
         dp_name = dp_email.split("@")[0].replace(".", " ").title()
 
-    # Try extracting token from body text (e.g. http://localhost:5173/request/tok_123 or /request/tok_123)
-    token_match = re.search(r'/request/([a-zA-Z0-9_\-]+)', payload.body_text)
-    token = token_match.group(1) if token_match else generate_unpredictable_token()
+    # Prefer extracted_token from webhook payload, then look in body text, or generate new
+    token = payload.extracted_token
+    if not token:
+        token_match = re.search(r'/request/([a-zA-Z0-9_\-]+)', payload.body_text)
+        token = token_match.group(1) if token_match else generate_unpredictable_token()
 
     cursor.execute("SELECT * FROM consent_requests WHERE token = ? OR notice_id = ? OR id = ?;", (token, token, token))
     row = cursor.fetchone()
 
+    # Extract dynamic domain, purpose, and attributes from the actual email content
+    new_domain = payload.domain or detect_domain_from_content(payload.subject, payload.body_text)
+    new_purpose = payload.purpose or extract_purpose_from_content(payload.subject, payload.body_text)
+    new_attrs = extract_attributes_from_email_content(payload.subject, payload.body_text)
+    fiduciary_name = resolve_fiduciary_name(token, new_domain, payload.subject, payload.body_text, payload.fiduciary_name or "")
+    fiduciary_category, fiduciary_logo = get_fiduciary_metadata(fiduciary_name, new_domain)
+    sent_date_str = payload.sent_date or datetime.utcnow().strftime("%A, %B %d, %Y")
+
+    dp_id = generate_data_principal_id(dp_email)
+    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
+    if not cursor.fetchone():
+        cursor.execute("""
+        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """, (dp_id, dp_name, dp_email, "+91 98765 12345", "CIALFOR-DP-2026", fiduciary_name, "Verified", datetime.utcnow().isoformat() + "Z"))
+
     if row:
         req = dict(row)
-        dp_id = generate_data_principal_id(dp_email)
-        cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-        if not cursor.fetchone():
-            cursor.execute("""
-            INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-            """, (dp_id, dp_name, dp_email, "+91 98765 12345", "CIALFOR-DP-2026", payload.fiduciary_name or "Cialfor Research Labs", "Verified", datetime.utcnow().isoformat() + "Z"))
-
-        cursor.execute("UPDATE consent_requests SET data_principal_id = ?, fiduciary_name = ? WHERE id = ?;", (dp_id, payload.fiduciary_name or "Cialfor Research Labs", req["id"]))
-        cursor.execute("UPDATE email_snapshots SET from_address = ?, to_address = ?, subject = ?, body_text = ? WHERE id = ?;", (payload.from_address or "Prerna Pandey <prerna.p@cialfor.com>", f"{dp_name} <{dp_email}>", payload.subject, payload.body_text, req["email_snapshot_id"]))
+        cursor.execute("""
+            UPDATE consent_requests 
+            SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ? 
+            WHERE id = ?;
+        """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), req["id"]))
+        
+        cursor.execute("""
+            UPDATE email_snapshots 
+            SET from_address = ?, to_address = ?, subject = ?, body_text = ?, sent_date = ? 
+            WHERE id = ?;
+        """, (payload.from_address or f"{fiduciary_name} <compliance@{new_domain.lower().replace(' ', '').replace('/', '')}.com>", f"{dp_name} <{dp_email}>", payload.subject, payload.body_text, sent_date_str, req["email_snapshot_id"]))
         conn.commit()
         cursor.execute("SELECT * FROM consent_requests WHERE id = ?;", (req["id"],))
         row = cursor.fetchone()
@@ -364,8 +555,8 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
             to_name=dp_name,
             subject=payload.subject,
             body=payload.body_text,
-            purpose=payload.purpose or payload.subject,
-            fiduciary=payload.fiduciary_name
+            purpose=new_purpose,
+            fiduciary=fiduciary_name
         )
 
     req = dict(row)
@@ -375,6 +566,7 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
     result["token"] = token
     result["link"] = f"http://localhost:5173/request/{token}"
     return result
+
 
 @app.post("/api/consent-requests")
 def create_consent_request(payload: ConsentRequestCreatePayload):
@@ -499,11 +691,25 @@ def resolve_consent_request(
             params_cr.append(purpose)
             need_update = True
 
-        if fiduciary:
+        # Ensure fiduciary is institutional, not personal
+        current_fid = req.get("fiduciary_name", "")
+        req_token = req.get("token") or token
+        req_domain = req.get("domain") or "Corporate/Enterprise"
+        resolved_fid = resolve_fiduciary_name(req_token, req_domain, subject or "", body or "", fiduciary or current_fid)
+        if resolved_fid != current_fid and (any(p in current_fid.lower() for p in ["prerna", "pandey", "unknown", "data fiduciary", "@"]) or "bank" in req_token.lower() or req_domain == "Banking"):
+            fid_cat, fid_logo = get_fiduciary_metadata(resolved_fid, req_domain)
+            updates_cr.append("fiduciary_name = ?")
+            params_cr.append(resolved_fid)
+            updates_cr.append("fiduciary_category = ?")
+            params_cr.append(fid_cat)
+            updates_cr.append("fiduciary_logo = ?")
+            params_cr.append(fid_logo)
+            need_update = True
+        elif fiduciary and fiduciary != current_fid:
             updates_cr.append("fiduciary_name = ?")
             params_cr.append(fiduciary)
             updates_es.append("from_address = ?")
-            params_es.append(f"{fiduciary} <prerna.p@cialfor.com>")
+            params_es.append(f"{fiduciary} <compliance@{req_domain.lower().replace(' ', '')}.com>")
             need_update = True
 
         if need_update:
@@ -640,11 +846,25 @@ def get_consent_request_by_token_path(
             params_cr.append(purpose)
             need_update = True
 
-        if fiduciary:
+        # Ensure fiduciary is institutional, not personal
+        current_fid = req.get("fiduciary_name", "")
+        req_token = req.get("token") or request_token
+        req_domain = req.get("domain") or "Corporate/Enterprise"
+        resolved_fid = resolve_fiduciary_name(req_token, req_domain, subject or "", body or "", fiduciary or current_fid)
+        if resolved_fid != current_fid and (any(p in current_fid.lower() for p in ["prerna", "pandey", "unknown", "data fiduciary", "@"]) or "bank" in req_token.lower() or req_domain == "Banking"):
+            fid_cat, fid_logo = get_fiduciary_metadata(resolved_fid, req_domain)
+            updates_cr.append("fiduciary_name = ?")
+            params_cr.append(resolved_fid)
+            updates_cr.append("fiduciary_category = ?")
+            params_cr.append(fid_cat)
+            updates_cr.append("fiduciary_logo = ?")
+            params_cr.append(fid_logo)
+            need_update = True
+        elif fiduciary and fiduciary != current_fid:
             updates_cr.append("fiduciary_name = ?")
             params_cr.append(fiduciary)
             updates_es.append("from_address = ?")
-            params_es.append(f"{fiduciary} <prerna.p@cialfor.com>")
+            params_es.append(f"{fiduciary} <compliance@{req_domain.lower().replace(' ', '')}.com>")
             need_update = True
 
         if need_update:
@@ -710,13 +930,41 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
 
         cursor.execute("SELECT * FROM consents WHERE notice_id = ? AND status = 'ACTIVE';", (req["notice_id"],))
         existing_consent = cursor.fetchone()
+        formatted_consent = None
+        if existing_consent:
+            ec = dict(existing_consent)
+            cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (req["data_principal_id"],))
+            dp_row = cursor.fetchone()
+            dp_dict = dict(dp_row) if dp_row else {}
+            formatted_consent = {
+                "consentId": ec["consent_id"],
+                "requestId": req["id"],
+                "principalId": req["data_principal_id"],
+                "principalName": dp_dict.get("name") or "Prerna Pandey",
+                "principalEmail": dp_dict.get("email") or "",
+                "fiduciary": ec["fiduciary_name"],
+                "fiduciaryCategory": ec.get("fiduciary_category") or req.get("fiduciary_category") or "Banking & Financial Services",
+                "fiduciaryLogo": ec.get("fiduciary_logo") or req.get("fiduciary_logo") or "🏦",
+                "purpose": ec["purpose"],
+                "noticeId": ec["notice_id"],
+                "legalBasis": req.get("legal_basis") or "Consent under DPDP Act 2023 (Section 6)",
+                "status": ec["status"],
+                "grantedOn": ec["granted_on"],
+                "expiresOn": ec["expires_on"],
+                "grantedAttributes": json.loads(ec["granted_attributes"]) if isinstance(ec["granted_attributes"], str) else ec["granted_attributes"],
+                "deniedAttributes": json.loads(ec["denied_attributes"]) if isinstance(ec["denied_attributes"], str) else (ec["denied_attributes"] or []),
+                "dpoContact": ec.get("dpo_contact") or req.get("dpo_email", ""),
+                "dataRegion": ec.get("data_region") or req.get("data_region", "India"),
+                "receiptHash": ec["receipt_hash"],
+                "customNote": ec.get("custom_note") or ""
+            }
         conn.close()
         return {
             "success": True,
             "already_processed": True,
             "message": f"Consent request already processed as {req['status']}.",
             "status": req["status"],
-            "consent": dict(existing_consent) if existing_consent else None
+            "consent": formatted_consent
         }
 
     if payload.decision == "GRANTED":
@@ -806,14 +1054,22 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
             expiry
         ))
 
+        cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (req["data_principal_id"],))
+        dp_row = cursor.fetchone()
+        dp_dict = dict(dp_row) if dp_row else {}
+
         consent_record = {
             "consentId": consent_id,
             "requestId": req["id"],
+            "principalId": req["data_principal_id"],
+            "principalName": dp_dict.get("name") or "Prerna Pandey",
+            "principalEmail": dp_dict.get("email") or "",
             "fiduciary": req["fiduciary_name"],
             "fiduciaryCategory": req["fiduciary_category"],
             "fiduciaryLogo": req["fiduciary_logo"],
             "purpose": req["purpose"],
             "noticeId": req["notice_id"],
+            "legalBasis": req.get("legal_basis") or "Consent under DPDP Act 2023 (Section 6)",
             "status": "ACTIVE",
             "grantedOn": now,
             "expiresOn": expiry,

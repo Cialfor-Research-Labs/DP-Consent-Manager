@@ -47,4 +47,7 @@ class EmailIngestPayload(BaseModel):
     purpose: Optional[str] = None
     domain: Optional[str] = None
     fiduciary_name: Optional[str] = None
+    extracted_token: Optional[str] = None
+    sent_date: Optional[str] = None
+
 

@@ -310,26 +310,27 @@ export const ConsentProvider = ({ children }) => {
 
       const res = await consentApi.submitConsentDecision(currentScenario.id || currentScenario.noticeId, payload);
       
-      let consentRecord = res.consent;
-      if (!consentRecord) {
-        consentRecord = {
-          consentId: `CNST-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-          fiduciary: currentScenario.fiduciary,
-          fiduciaryCategory: currentScenario.fiduciaryCategory,
-          fiduciaryLogo: currentScenario.fiduciaryLogo,
-          purpose: currentScenario.purpose,
-          noticeId: currentScenario.noticeId,
-          status: 'ACTIVE',
-          grantedOn: new Date().toISOString(),
-          expiresOn: new Date(Date.now() + 365*24*60*60*1000).toISOString(),
-          grantedAttributes: selectedAttrList,
-          deniedAttributes: deniedAttrList,
-          dpoContact: currentScenario.dpoEmail,
-          dataRegion: currentScenario.dataRegion,
-          receiptHash: `0x${Array.from({length: 32}, () => Math.floor(Math.random()*16).toString(16)).join('')}`,
-          customNote: customNote
-        };
-      }
+      let rawRecord = res.consent || {};
+      let consentRecord = {
+        consentId: rawRecord.consentId || rawRecord.consent_id || `CNST-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+        fiduciary: rawRecord.fiduciary || rawRecord.fiduciary_name || currentScenario.fiduciary || 'ABC National Bank',
+        fiduciaryCategory: rawRecord.fiduciaryCategory || rawRecord.fiduciary_category || currentScenario.fiduciaryCategory || 'Banking & Financial Services',
+        fiduciaryLogo: rawRecord.fiduciaryLogo || rawRecord.fiduciary_logo || currentScenario.fiduciaryLogo || '🏦',
+        principalName: rawRecord.principalName || currentScenario.dataPrincipal?.name || currentScenario.to_name || 'Prerna Pandey',
+        principalId: rawRecord.principalId || rawRecord.data_principal_id || currentScenario.dataPrincipal?.id || 'DP-2026-90011',
+        purpose: rawRecord.purpose || currentScenario.purpose,
+        noticeId: rawRecord.noticeId || rawRecord.notice_id || currentScenario.noticeId,
+        legalBasis: rawRecord.legalBasis || currentScenario.legalBasis || 'Consent under DPDP Act 2023 (Section 6)',
+        status: 'ACTIVE',
+        grantedOn: rawRecord.grantedOn || rawRecord.granted_on || new Date().toISOString(),
+        expiresOn: rawRecord.expiresOn || rawRecord.expires_on || new Date(Date.now() + 365*24*60*60*1000).toISOString(),
+        grantedAttributes: rawRecord.grantedAttributes || (typeof rawRecord.granted_attributes === 'string' ? JSON.parse(rawRecord.granted_attributes) : rawRecord.granted_attributes) || selectedAttrList,
+        deniedAttributes: rawRecord.deniedAttributes || (typeof rawRecord.denied_attributes === 'string' ? JSON.parse(rawRecord.denied_attributes) : rawRecord.denied_attributes) || deniedAttrList,
+        dpoContact: rawRecord.dpoContact || currentScenario.dpoEmail,
+        dataRegion: rawRecord.dataRegion || currentScenario.dataRegion,
+        receiptHash: rawRecord.receiptHash || rawRecord.receipt_hash || `0x${Array.from({length: 32}, () => Math.floor(Math.random()*16).toString(16)).join('')}`,
+        customNote: customNote
+      };
 
       setLatestReceipt(consentRecord);
       

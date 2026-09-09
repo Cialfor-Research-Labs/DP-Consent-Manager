@@ -24,9 +24,11 @@ export const ActiveConsentsView = () => {
   const [revokeReason, setRevokeReason] = useState('');
 
   const filteredConsents = activeConsents.filter(c => {
-    const matchesSearch = c.fiduciary.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          c.purpose.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          c.consentId.toLowerCase().includes(searchTerm.toLowerCase());
+    const fid = (c.fiduciary || c.fiduciary_name || '').toLowerCase();
+    const purp = (c.purpose || '').toLowerCase();
+    const cid = (c.consentId || c.consent_id || '').toLowerCase();
+    const term = (searchTerm || '').toLowerCase();
+    const matchesSearch = fid.includes(term) || purp.includes(term) || cid.includes(term);
     const matchesStatus = filterStatus === 'ALL' || c.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -105,11 +107,18 @@ export const ActiveConsentsView = () => {
 
       {/* Consent Cards Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(480px, 1fr))', gap: '28px' }}>
-        {filteredConsents.map((consent) => {
+        {filteredConsents.map((consent, cardIdx) => {
           const isActive = consent.status === 'ACTIVE';
+          const consentId = consent.consentId || consent.consent_id || `CNST-REC-${cardIdx}`;
+          const grantedAttrs = Array.isArray(consent.grantedAttributes)
+            ? consent.grantedAttributes
+            : (typeof consent.granted_attributes === 'string' ? JSON.parse(consent.granted_attributes || '[]') : (consent.granted_attributes || []));
+          const noticeId = consent.noticeId || consent.notice_id || 'NTC-GENERAL';
+          const grantedDate = consent.grantedOn || consent.granted_on;
+
           return (
             <div 
-              key={consent.consentId} 
+              key={consentId} 
               className="glass-card"
               style={{ 
                 borderLeft: isActive ? '4px solid #10b981' : '4px solid #ef4444',
@@ -123,14 +132,14 @@ export const ActiveConsentsView = () => {
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                     <div style={{ fontSize: '2.2rem', width: '52px', height: '52px', borderRadius: '14px', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {consent.fiduciaryLogo || '🏛️'}
+                      {consent.fiduciaryLogo || consent.fiduciary_logo || '🏛️'}
                     </div>
                     <div>
                       <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'white' }}>
-                        {consent.fiduciary}
+                        {consent.fiduciary || consent.fiduciary_name}
                       </h3>
                       <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                        {consent.fiduciaryCategory} • Notice {consent.noticeId}
+                        {consent.fiduciaryCategory || consent.fiduciary_category || 'Corporate Entity'} • Notice {noticeId}
                       </div>
                     </div>
                   </div>
@@ -149,10 +158,10 @@ export const ActiveConsentsView = () => {
                 {/* Granted Attributes Tags */}
                 <div style={{ marginBottom: '20px' }}>
                   <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-                    {t('grantedAttrs')} ({consent.grantedAttributes.length}):
+                    {t('grantedAttrs')} ({grantedAttrs.length}):
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                    {consent.grantedAttributes.map((attr, idx) => (
+                    {grantedAttrs.map((attr, idx) => (
                       <span key={idx} style={{ background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.25)', color: '#6ee7b7', padding: '3px 10px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600 }}>
                         ✓ {attr}
                       </span>
@@ -162,8 +171,8 @@ export const ActiveConsentsView = () => {
 
                 {/* Metadata Row */}
                 <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border-color)' }}>
-                  <span>{t('grantedOn')}: {new Date(consent.grantedOn).toLocaleDateString()}</span>
-                  <span>Consent ID: <code style={{ color: '#60a5fa' }}>{consent.consentId}</code></span>
+                  <span>{t('grantedOn')}: {grantedDate ? new Date(grantedDate).toLocaleDateString() : 'Active'}</span>
+                  <span>Consent ID: <code style={{ color: '#60a5fa' }}>{consentId}</code></span>
                 </div>
               </div>
 
@@ -173,7 +182,7 @@ export const ActiveConsentsView = () => {
                   <button 
                     className="btn btn-outline-danger btn-sm"
                     style={{ flex: 1, padding: '10px 16px', fontSize: '0.88rem' }}
-                    onClick={() => setRevokingConsentId(consent.consentId)}
+                    onClick={() => setRevokingConsentId(consentId)}
                   >
                     <XCircle size={15} />
                     {t('revokeBtn')}
@@ -181,7 +190,7 @@ export const ActiveConsentsView = () => {
                 ) : (
                   <div style={{ flex: 1, fontSize: '0.85rem', color: '#f87171', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <XCircle size={15} />
-                    Revoked on {consent.revokedOn ? new Date(consent.revokedOn).toLocaleDateString() : 'Previous date'}
+                    Revoked on {consent.revokedOn || consent.revoked_on ? new Date(consent.revokedOn || consent.revoked_on).toLocaleDateString() : 'Previous date'}
                   </div>
                 )}
 

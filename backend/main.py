@@ -1044,6 +1044,18 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
 
         cursor.execute("DELETE FROM consents WHERE notice_id = ?;", (req["notice_id"],))
 
+        # Resolve human-readable attribute names from requested_attributes
+        readable_granted = []
+        readable_denied = []
+        try:
+            req_attrs = json.loads(req["requested_attributes"])
+            attr_map = {a.get("id"): a.get("name") for a in req_attrs if isinstance(a, dict)}
+            readable_granted = [attr_map.get(a, a) for a in payload.selected_attributes]
+            readable_denied = [attr_map.get(a, a) for a in payload.denied_attributes]
+        except Exception:
+            readable_granted = payload.selected_attributes
+            readable_denied = payload.denied_attributes
+
         cursor.execute("""
         INSERT INTO consents (consent_id, request_id, data_principal_id, fiduciary_name, fiduciary_category, fiduciary_logo, purpose, notice_id, status, granted_attributes, denied_attributes, dpo_contact, data_region, receipt_hash, custom_note, granted_on, expires_on)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
@@ -1057,8 +1069,8 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
             req["purpose"],
             req["notice_id"],
             "ACTIVE",
-            json.dumps(payload.selected_attributes),
-            json.dumps(payload.denied_attributes),
+            json.dumps(readable_granted),
+            json.dumps(readable_denied),
             req["dpo_email"],
             req["data_region"],
             receipt_hash,
@@ -1117,48 +1129,68 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
 
     # ── QUEUE SAME-THREAD NOTIFICATION FOR GOOGLE APPS SCRIPT AUTO-REPLY ──
     thread_id = req.get("thread_id")
-    if not thread_id and req.get("email_snapshot_id"):
-        cursor.execute("SELECT thread_id FROM email_snapshots WHERE id = ?;", (req["email_snapshot_id"],))
-        es_row = cursor.fetchone()
-        if es_row and es_row["thread_id"]:
-            thread_id = es_row["thread_id"]
+    original_message_id = req.get("message_id")
+    original_subject = req.get("purpose")
+    actual_sender = None
 
-    if thread_id:
-        notif_id = f"NOTIF-2026-{random.randint(1000, 9999)}"
-        notif_details = {
+    if req.get("email_snapshot_id"):
+        cursor.execute("SELECT from_address, thread_id, message_id, subject FROM email_snapshots WHERE id = ?;", (req["email_snapshot_id"],))
+        es_row = cursor.fetchone()
+        if es_row:
+            if not thread_id and es_row["thread_id"]:
+                thread_id = es_row["thread_id"]
+            if not original_message_id and es_row["message_id"]:
+                original_message_id = es_row["message_id"]
+            if es_row["subject"]:
+                original_subject = es_row["subject"]
+            raw_from = es_row["from_address"] or ""
+            match = re.search(r'<([^>]+)>', raw_from)
+            actual_sender = match.group(1).strip() if match else (raw_from.strip() if "@" in raw_from else None)
+
+    recipient_email = actual_sender or req.get("fiduciary_email") or "compliance@fiduciary.com"
+
+    notif_id = f"NOTIF-2026-{random.randint(1000, 9999)}"
+    notif_details = {
+        "decision": payload.decision,
+        "token": req.get("token"),
+        "requestId": req["id"],
+        "fiduciaryName": req["fiduciary_name"],
+        "principalName": consent_record.get("principalName", "Data Principal") if consent_record else "Data Principal",
+        "principalEmail": consent_record.get("principalEmail", "") if consent_record else "",
+        "recipientEmail": recipient_email,
+        "originalSubject": original_subject,
+        "noticeId": req["notice_id"],
+        "purpose": req["purpose"],
+        "selectedAttributes": payload.selected_attributes,
+        "deniedAttributes": payload.denied_attributes,
+        "remark": payload.remark,
+        "artifact": consent_record if consent_record else {
             "decision": payload.decision,
-            "fiduciaryName": req["fiduciary_name"],
-            "principalName": consent_record.get("principalName", "Data Principal") if consent_record else "Data Principal",
-            "principalEmail": consent_record.get("principalEmail", "") if consent_record else "",
             "noticeId": req["notice_id"],
-            "purpose": req["purpose"],
-            "selectedAttributes": payload.selected_attributes,
-            "deniedAttributes": payload.denied_attributes,
-            "remark": payload.remark,
-            "artifact": consent_record if consent_record else {
-                "decision": payload.decision,
-                "noticeId": req["notice_id"],
-                "fiduciary": req["fiduciary_name"],
-                "reason": payload.remark
-            }
+            "fiduciary": req["fiduciary_name"],
+            "reason": payload.remark
         }
-        cursor.execute("""
-        INSERT INTO fiduciary_notifications (id, request_id, consent_id, thread_id, message_id, recipient_email, fiduciary_name, action, artifact_id, subject, details_json, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?);
-        """, (
-            notif_id,
-            req["id"],
-            consent_record["consentId"] if consent_record else None,
-            thread_id,
-            req.get("message_id"),
-            req.get("fiduciary_email") or "compliance@fiduciary.com",
-            req["fiduciary_name"],
-            payload.decision,
-            consent_record["consentId"] if consent_record else None,
-            f"Re: Consent Notice {req['notice_id']} — Decision: {payload.decision}",
-            json.dumps(notif_details),
-            now
-        ))
+    }
+
+    reply_subject = f"Re: {original_subject}" if original_subject and not original_subject.lower().startswith("re:") else (original_subject or f"Re: Consent Notice {req['notice_id']} — Decision: {payload.decision}")
+
+    cursor.execute("""
+    INSERT INTO fiduciary_notifications (id, request_id, consent_id, thread_id, message_id, recipient_email, fiduciary_name, action, artifact_id, subject, details_json, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?);
+    """, (
+        notif_id,
+        req["id"],
+        consent_record["consentId"] if consent_record else None,
+        thread_id,
+        original_message_id,
+        recipient_email,
+        req["fiduciary_name"],
+        payload.decision,
+        consent_record["consentId"] if consent_record else None,
+        reply_subject,
+        json.dumps(notif_details),
+        now
+    ))
 
     conn.commit()
     conn.close()
@@ -1181,6 +1213,9 @@ def list_pending_notifications():
     for r in rows:
         d = dict(r)
         d["details"] = json.loads(d["details_json"])
+        d["token"] = d["details"].get("token")
+        d["notice_id"] = d["details"].get("noticeId")
+        d["original_subject"] = d["details"].get("originalSubject")
         results.append(d)
     return results
 
@@ -1199,28 +1234,49 @@ def acknowledge_notification(notification_id: str):
 def list_consents(principalId: Optional[str] = Query(None)):
     conn = get_db()
     cursor = conn.cursor()
+    rows = []
     if principalId:
         cursor.execute("SELECT * FROM consents WHERE data_principal_id = ? ORDER BY granted_on DESC;", (principalId,))
-    else:
+        rows = cursor.fetchall()
+    
+    # If no results found for specific principalId or principalId not supplied, return all consents
+    if not rows:
         cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
-    rows = cursor.fetchall()
+        rows = cursor.fetchall()
     conn.close()
 
     results = []
     for r in rows:
         d = dict(r)
-        d["grantedAttributes"] = json.loads(d["granted_attributes"])
-        d["deniedAttributes"] = json.loads(d["denied_attributes"])
-        d["grantedOn"] = d["granted_on"]
-        d["expiresOn"] = d["expires_on"]
-        d["fiduciary"] = d["fiduciary_name"]
-        d["fiduciaryCategory"] = d["fiduciary_category"]
-        d["fiduciaryLogo"] = d["fiduciary_logo"]
-        d["noticeId"] = d["notice_id"]
-        d["dpoContact"] = d["dpo_contact"]
-        d["dataRegion"] = d["data_region"]
-        d["receiptHash"] = d["receipt_hash"]
-        d["customNote"] = d["custom_note"]
+        d["consentId"] = d.get("consent_id")
+        # Safe JSON parse for granted_attributes
+        if isinstance(d.get("granted_attributes"), str):
+            try:
+                d["grantedAttributes"] = json.loads(d["granted_attributes"])
+            except Exception:
+                d["grantedAttributes"] = [d["granted_attributes"]]
+        else:
+            d["grantedAttributes"] = d.get("granted_attributes") or []
+
+        # Safe JSON parse for denied_attributes
+        if isinstance(d.get("denied_attributes"), str):
+            try:
+                d["deniedAttributes"] = json.loads(d["denied_attributes"])
+            except Exception:
+                d["deniedAttributes"] = []
+        else:
+            d["deniedAttributes"] = d.get("denied_attributes") or []
+
+        d["grantedOn"] = d.get("granted_on")
+        d["expiresOn"] = d.get("expires_on")
+        d["fiduciary"] = d.get("fiduciary_name") or "Data Fiduciary"
+        d["fiduciaryCategory"] = d.get("fiduciary_category") or "Corporate Entity"
+        d["fiduciaryLogo"] = d.get("fiduciary_logo") or "🏢"
+        d["noticeId"] = d.get("notice_id") or "NTC-GENERAL"
+        d["dpoContact"] = d.get("dpo_contact") or ""
+        d["dataRegion"] = d.get("data_region") or "India"
+        d["receiptHash"] = d.get("receipt_hash") or ""
+        d["customNote"] = d.get("custom_note") or ""
         results.append(d)
     return results
 

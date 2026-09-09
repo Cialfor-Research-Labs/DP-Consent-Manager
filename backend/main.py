@@ -60,12 +60,15 @@ def hydrate_request(req_row, conn):
                 "type": "OFFICIAL DPDP NOTICE SNAPSHOT DOCUMENT"
             }
         ]
+        es_dict["threadId"] = es_dict.get("thread_id", "")
+        es_dict["messageId"] = es_dict.get("message_id", "")
     req["emailSnapshot"] = es_dict
 
     # Compatibility mappings for frontend UI
     req["domain"] = req.get("domain") or "Corporate/Enterprise"
     req["title"] = req.get("purpose") or req.get("subject") or "Consent Request Notice"
     req["fiduciary"] = req["fiduciary_name"]
+    req["fiduciaryName"] = req["fiduciary_name"]
     req["fiduciaryCategory"] = req.get("fiduciary_category") or "Corporate Fiduciary"
     req["fiduciaryLogo"] = req.get("fiduciary_logo") or "🏢"
     req["fiduciaryEmail"] = req["fiduciary_email"]
@@ -78,6 +81,8 @@ def hydrate_request(req_row, conn):
     req["attributes"] = req["requestedAttributes"]
     req["emailSubject"] = req["emailSnapshot"].get("subject", "")
     req["emailBody"] = req["emailSnapshot"].get("body_text", "")
+    req["threadId"] = req.get("thread_id") or req["emailSnapshot"].get("threadId", "")
+    req["messageId"] = req.get("message_id") or req["emailSnapshot"].get("messageId", "")
 
     return req
 
@@ -387,7 +392,9 @@ def dynamic_create_request_for_token(
     subject: str = None,
     body: str = None,
     purpose: str = None,
-    fiduciary: str = None
+    fiduciary: str = None,
+    thread_id: str = None,
+    message_id: str = None
 ):
     cursor = conn.cursor()
     dp_name = to_name or "Prerna Pandey"
@@ -430,8 +437,8 @@ def dynamic_create_request_for_token(
     # 2. Create EmailSnapshot
     snapshot_id = f"ES-2026-CIALFOR-{random.randint(1000, 9999)}"
     cursor.execute("""
-    INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size, dkim_status, spf_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size, dkim_status, spf_status, thread_id, message_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         snapshot_id,
         f"{final_fiduciary} <compliance@{final_domain.lower().replace(' ', '').replace('/', '')}.com>",
@@ -442,7 +449,9 @@ def dynamic_create_request_for_token(
         "Statutory_Privacy_Notice_NTC-2026-CIALFOR-001.pdf",
         "1.2 MB",
         "DKIM Signed",
-        "SPF Pass"
+        "SPF Pass",
+        thread_id,
+        message_id
     ))
 
     # 3. Create ConsentRequest
@@ -452,8 +461,8 @@ def dynamic_create_request_for_token(
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
 
     cursor.execute("""
-    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, domain, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, domain, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at, thread_id, message_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         req_id,
         token,
@@ -474,7 +483,9 @@ def dynamic_create_request_for_token(
         json.dumps(requested_attrs),
         "PENDING",
         now,
-        expires
+        expires,
+        thread_id,
+        message_id
     ))
 
     conn.commit()
@@ -535,15 +546,15 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
         req = dict(row)
         cursor.execute("""
             UPDATE consent_requests 
-            SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ? 
+            SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
             WHERE id = ?;
-        """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), req["id"]))
+        """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), payload.thread_id, payload.message_id, req["id"]))
         
         cursor.execute("""
             UPDATE email_snapshots 
-            SET from_address = ?, to_address = ?, subject = ?, body_text = ?, sent_date = ? 
+            SET from_address = ?, to_address = ?, subject = ?, body_text = ?, sent_date = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
             WHERE id = ?;
-        """, (payload.from_address or f"{fiduciary_name} <compliance@{new_domain.lower().replace(' ', '').replace('/', '')}.com>", f"{dp_name} <{dp_email}>", payload.subject, payload.body_text, sent_date_str, req["email_snapshot_id"]))
+        """, (payload.from_address or f"{fiduciary_name} <compliance@{new_domain.lower().replace(' ', '').replace('/', '')}.com>", f"{dp_name} <{dp_email}>", payload.subject, payload.body_text, sent_date_str, payload.thread_id, payload.message_id, req["email_snapshot_id"]))
         conn.commit()
         cursor.execute("SELECT * FROM consent_requests WHERE id = ?;", (req["id"],))
         row = cursor.fetchone()
@@ -556,7 +567,9 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
             subject=payload.subject,
             body=payload.body_text,
             purpose=new_purpose,
-            fiduciary=fiduciary_name
+            fiduciary=fiduciary_name,
+            thread_id=payload.thread_id,
+            message_id=payload.message_id
         )
 
     req = dict(row)
@@ -1102,6 +1115,51 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         "SUCCESS" if payload.decision == "GRANTED" else "DENIED"
     ))
 
+    # ── QUEUE SAME-THREAD NOTIFICATION FOR GOOGLE APPS SCRIPT AUTO-REPLY ──
+    thread_id = req.get("thread_id")
+    if not thread_id and req.get("email_snapshot_id"):
+        cursor.execute("SELECT thread_id FROM email_snapshots WHERE id = ?;", (req["email_snapshot_id"],))
+        es_row = cursor.fetchone()
+        if es_row and es_row["thread_id"]:
+            thread_id = es_row["thread_id"]
+
+    if thread_id:
+        notif_id = f"NOTIF-2026-{random.randint(1000, 9999)}"
+        notif_details = {
+            "decision": payload.decision,
+            "fiduciaryName": req["fiduciary_name"],
+            "principalName": consent_record.get("principalName", "Data Principal") if consent_record else "Data Principal",
+            "principalEmail": consent_record.get("principalEmail", "") if consent_record else "",
+            "noticeId": req["notice_id"],
+            "purpose": req["purpose"],
+            "selectedAttributes": payload.selected_attributes,
+            "deniedAttributes": payload.denied_attributes,
+            "remark": payload.remark,
+            "artifact": consent_record if consent_record else {
+                "decision": payload.decision,
+                "noticeId": req["notice_id"],
+                "fiduciary": req["fiduciary_name"],
+                "reason": payload.remark
+            }
+        }
+        cursor.execute("""
+        INSERT INTO fiduciary_notifications (id, request_id, consent_id, thread_id, message_id, recipient_email, fiduciary_name, action, artifact_id, subject, details_json, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?);
+        """, (
+            notif_id,
+            req["id"],
+            consent_record["consentId"] if consent_record else None,
+            thread_id,
+            req.get("message_id"),
+            req.get("fiduciary_email") or "compliance@fiduciary.com",
+            req["fiduciary_name"],
+            payload.decision,
+            consent_record["consentId"] if consent_record else None,
+            f"Re: Consent Notice {req['notice_id']} — Decision: {payload.decision}",
+            json.dumps(notif_details),
+            now
+        ))
+
     conn.commit()
     conn.close()
 
@@ -1110,6 +1168,32 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         "message": f"Consent decision {payload.decision} recorded successfully.",
         "consent": consent_record
     }
+
+@app.get("/api/notifications/pending")
+def list_pending_notifications():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM fiduciary_notifications WHERE status = 'PENDING' ORDER BY created_at ASC;")
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["details"] = json.loads(d["details_json"])
+        results.append(d)
+    return results
+
+@app.post("/api/notifications/{notification_id}/ack")
+def acknowledge_notification(notification_id: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat() + "Z"
+    cursor.execute("UPDATE fiduciary_notifications SET status = 'SENT', sent_at = ? WHERE id = ?;", (now, notification_id))
+    conn.commit()
+    conn.close()
+    return {"success": True, "id": notification_id, "status": "SENT", "sent_at": now}
+
 
 @app.get("/api/consents")
 def list_consents(principalId: Optional[str] = Query(None)):

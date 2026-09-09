@@ -146,10 +146,21 @@ export const ConsentProvider = ({ children }) => {
   const refetchBackendData = useCallback(async () => {
     try {
       setApiError(null);
-      // Fetch Active Consents
-      const fetchedConsents = await consentApi.fetchActiveConsents(dataPrincipal.id);
-      if (fetchedConsents && Array.isArray(fetchedConsents)) {
-        setActiveConsents(fetchedConsents);
+      // Fetch Active Consents globally across all fiduciaries
+      const fetchedConsents = await consentApi.fetchActiveConsents();
+      if (fetchedConsents && Array.isArray(fetchedConsents) && fetchedConsents.length > 0) {
+        setActiveConsents(prev => {
+          const map = new Map();
+          fetchedConsents.forEach(c => {
+            const cid = c.consentId || c.consent_id;
+            if (cid) map.set(cid, c);
+          });
+          prev.forEach(c => {
+            const cid = c.consentId || c.consent_id;
+            if (cid && !map.has(cid)) map.set(cid, c);
+          });
+          return Array.from(map.values());
+        });
       }
 
       // Fetch Audit Logs
@@ -334,6 +345,12 @@ export const ConsentProvider = ({ children }) => {
 
       setLatestReceipt(consentRecord);
       
+      // Immediately reflect in activeConsents state
+      setActiveConsents(prev => {
+        const remaining = prev.filter(c => (c.consentId || c.consent_id) !== consentRecord.consentId && (c.noticeId || c.notice_id) !== consentRecord.noticeId);
+        return [consentRecord, ...remaining];
+      });
+
       // Sync state and refetch from backend
       await refetchBackendData();
 
@@ -367,6 +384,9 @@ export const ConsentProvider = ({ children }) => {
       };
 
       await consentApi.submitConsentDecision(currentScenario.id || currentScenario.noticeId, payload);
+      
+      // Remove any previously active consent for this notice
+      setActiveConsents(prev => prev.filter(c => (c.noticeId || c.notice_id) !== currentScenario.noticeId));
       await refetchBackendData();
 
       setToastMessage({
@@ -389,6 +409,15 @@ export const ConsentProvider = ({ children }) => {
     setLoading(true);
     try {
       await consentApi.revokeConsent(consentId, reason);
+      
+      // Immediately update status to REVOKED in local activeConsents
+      setActiveConsents(prev => prev.map(c => {
+        if ((c.consentId || c.consent_id) === consentId) {
+          return { ...c, status: 'REVOKED', revokedOn: new Date().toISOString(), revocationReason: reason };
+        }
+        return c;
+      }));
+
       await refetchBackendData();
 
       setToastMessage({

@@ -168,6 +168,37 @@ def init_db():
     );
     """)
 
+    # 8. Fiduciary Notifications Table (Same-Thread Auto-Replies)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS fiduciary_notifications (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        consent_id TEXT,
+        thread_id TEXT NOT NULL,
+        message_id TEXT,
+        recipient_email TEXT,
+        fiduciary_name TEXT NOT NULL,
+        action TEXT NOT NULL,
+        artifact_id TEXT,
+        subject TEXT,
+        details_json TEXT NOT NULL,
+        status TEXT DEFAULT 'PENDING',
+        created_at TEXT NOT NULL,
+        sent_at TEXT
+    );
+    """)
+
+    # Auto-add thread_id and message_id columns to existing tables if missing
+    for tbl in ["consent_requests", "email_snapshots"]:
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN thread_id TEXT;")
+        except Exception:
+            pass
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN message_id TEXT;")
+        except Exception:
+            pass
+
     cursor.execute("SELECT COUNT(*) FROM consent_requests;")
     count = cursor.fetchone()[0]
     if count == 0:

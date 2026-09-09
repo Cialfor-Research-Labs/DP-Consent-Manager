@@ -49,5 +49,7 @@ class EmailIngestPayload(BaseModel):
     fiduciary_name: Optional[str] = None
     extracted_token: Optional[str] = None
     sent_date: Optional[str] = None
+    thread_id: Optional[str] = None
+    message_id: Optional[str] = None
 
 

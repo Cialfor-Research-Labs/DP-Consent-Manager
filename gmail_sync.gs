@@ -56,6 +56,13 @@ var GMAIL_SEARCH_QUERY = [
 function syncConsentEmails() {
   var props = PropertiesService.getScriptProperties();
 
+  // Auto-upgrade cache so all active consent emails get their Gmail thread_id registered in backend
+  if (props.getProperty('SYNC_ENGINE_CACHE_VERSION') !== '3.0') {
+    props.deleteProperty('SYNCED_MESSAGE_IDS');
+    props.setProperty('SYNC_ENGINE_CACHE_VERSION', '3.0');
+    Logger.log('[UPGRADE] Refreshed sync deduplication index to capture Gmail thread IDs.');
+  }
+
   // Build date filter — only process emails newer than LOOKBACK_DAYS
   var cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - LOOKBACK_DAYS);
@@ -323,102 +330,133 @@ function dispatchPendingConsentReplies() {
     Logger.log('Found ' + pendingList.length + ' pending decision notification(s).');
 
     pendingList.forEach(function(item) {
-      if (!item.thread_id) {
-        Logger.log('[NOTIF-SKIP] Item ' + item.id + ' lacks thread_id.');
-        return;
-      }
+      var details = item.details || {};
+      var action = item.action || 'PROCESSED';
+      var isGranted = (action === 'GRANTED');
+      var artifactId = item.artifact_id || (details.artifact ? details.artifact.consentId : 'N/A') || 'N/A';
+      var principalName = details.principalName || 'Data Principal';
+      var fiduciaryName = item.fiduciary_name || details.fiduciaryName || 'Data Fiduciary';
+      var noticeId = item.notice_id || details.noticeId || 'N/A';
+      var purpose = details.purpose || 'Data Processing';
+      var token = item.token || details.token || '';
+      var originalSubject = item.original_subject || details.originalSubject || item.subject || '';
+      var recipientEmail = item.recipient_email || details.recipientEmail || 'pandeyprerna1407@gmail.com';
+      var selectedAttrs = details.selectedAttributes || (details.artifact ? details.artifact.grantedAttributes : []) || [];
+      var deniedAttrs = details.deniedAttributes || (details.artifact ? details.artifact.deniedAttributes : []) || [];
+      var receiptHash = (details.artifact && details.artifact.receiptHash) ? details.artifact.receiptHash : 'N/A';
+      var remark = details.remark || (details.artifact ? details.artifact.customNote : '') || '';
+
+      var statusColor = isGranted ? '#10b981' : '#ef4444';
+      var statusBadge = isGranted ? 'CONSENT GRANTED' : 'CONSENT DENIED';
+
+      // ── RICH HTML EMAIL TEMPLATE ───────────────────────────
+      var htmlBody = [
+        '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Arial, sans-serif; max-width: 620px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; color: #1e293b; background: #ffffff;">',
+        '  <div style="background: #0f172a; color: #ffffff; padding: 18px 24px;">',
+        '    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #94a3b8; font-weight: 600;">DPDP Act 2023 Statutory Notice Response</div>',
+        '    <div style="font-size: 16px; font-weight: 700; margin-top: 4px; color: #f8fafc;">Digital Consent Status Confirmation</div>',
+        '  </div>',
+        '  <div style="padding: 24px;">',
+        '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 14px 0;">',
+        '      Dear <strong>' + fiduciaryName + '</strong>,',
+        '    </p>',
+        '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 18px 0; color: #334155;">',
+        '      The Data Principal <strong>' + principalName + '</strong> has recorded a formal decision regarding your consent notice under <strong>Section 6 of the Digital Personal Data Protection (DPDP) Act, 2023</strong>.',
+        '    </p>',
+        '    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">',
+        '      <div style="display: inline-block; background: ' + statusColor + '; color: #ffffff; padding: 4px 12px; border-radius: 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">' + statusBadge + '</div>',
+        '      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">',
+        '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b; width: 40%;">Notice Reference:</td><td style="padding: 6px 0; font-weight: 600;">' + noticeId + '</td></tr>',
+        (artifactId && artifactId !== 'N/A' ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Consent Artifact ID:</td><td style="padding: 6px 0; font-family: monospace; color: #2563eb; font-weight: 600;">' + artifactId + '</td></tr>' : ''),
+        '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Specified Purpose:</td><td style="padding: 6px 0;">' + purpose + '</td></tr>',
+        (selectedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Granted Attributes (' + selectedAttrs.length + '):</td><td style="padding: 6px 0; color: #16a34a; font-weight: 600;">' + selectedAttrs.join(', ') + '</td></tr>' : ''),
+        (deniedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Denied Attributes:</td><td style="padding: 6px 0; color: #dc2626;">' + deniedAttrs.join(', ') + '</td></tr>' : ''),
+        (remark ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Principal Remark:</td><td style="padding: 6px 0; font-style: italic;">' + remark + '</td></tr>' : ''),
+        '      </table>',
+        '    </div>',
+        (receiptHash && receiptHash !== 'N/A' ? [
+          '    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 18px;">',
+          '      <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">SHA-256 Digital Cryptographic Signature:</div>',
+          '      <div style="font-family: monospace; font-size: 11px; color: #0f766e; word-break: break-all;">' + receiptHash + '</div>',
+          '    </div>'
+        ].join('\n') : ''),
+        '    <div style="border-top: 1px solid #e2e8f0; padding-top: 14px; font-size: 11px; color: #94a3b8; text-align: center;">',
+        '      Secured by Data Principal Consent Manager • DPDP Act 2023 Standards Compliant',
+        '    </div>',
+        '  </div>',
+        '</div>'
+      ].join('\n');
+
+      // ── PLAIN TEXT FALLBACK ────────────────────────────────
+      var plainText = [
+        '=== DPDP ACT 2023 DIGITAL CONSENT STATUS UPDATE ===',
+        'Decision: ' + statusBadge,
+        'Notice ID: ' + noticeId,
+        (artifactId !== 'N/A' ? 'Artifact ID: ' + artifactId : ''),
+        'Data Principal: ' + principalName,
+        'Purpose: ' + purpose,
+        (selectedAttrs.length > 0 ? 'Granted Attributes: ' + selectedAttrs.join(', ') : ''),
+        (deniedAttrs.length > 0 ? 'Denied Attributes: ' + deniedAttrs.join(', ') : ''),
+        (receiptHash !== 'N/A' ? 'Digital Signature: ' + receiptHash : ''),
+        '==================================================='
+      ].filter(Boolean).join('\n');
+
+      var replySubject = item.subject || ('Re: ' + (originalSubject || ('Consent Notice ' + noticeId)));
 
       try {
-        var thread = GmailApp.getThreadById(item.thread_id);
-        if (!thread) {
-          Logger.log('[NOTIF-WARN] Thread not found for ID: ' + item.thread_id);
-          return;
+        var thread = null;
+
+        // 1. Primary: Try direct thread lookup by ID
+        if (item.thread_id) {
+          try {
+            thread = GmailApp.getThreadById(item.thread_id);
+          } catch (te) {
+            Logger.log('[WARN] getThreadById failed: ' + te);
+          }
         }
 
-        var details = item.details || {};
-        var action = item.action || 'PROCESSED';
-        var isGranted = (action === 'GRANTED');
-        var artifactId = item.artifact_id || (details.artifact ? details.artifact.consentId : 'N/A') || 'N/A';
-        var principalName = details.principalName || 'Data Principal';
-        var fiduciaryName = item.fiduciary_name || details.fiduciaryName || 'Data Fiduciary';
-        var noticeId = details.noticeId || 'N/A';
-        var purpose = details.purpose || 'Data Processing';
-        var selectedAttrs = details.selectedAttributes || (details.artifact ? details.artifact.grantedAttributes : []) || [];
-        var deniedAttrs = details.deniedAttributes || (details.artifact ? details.artifact.deniedAttributes : []) || [];
-        var receiptHash = (details.artifact && details.artifact.receiptHash) ? details.artifact.receiptHash : 'N/A';
-        var remark = details.remark || (details.artifact ? details.artifact.customNote : '') || '';
+        // 2. Secondary: Fallback search if thread wasn't found
+        if (!thread) {
+          var searchParts = [];
+          if (token) searchParts.push('"' + token + '"');
+          if (noticeId && noticeId !== 'N/A') searchParts.push('"' + noticeId + '"');
+          var cleanSubj = originalSubject.replace(/^Re:\s*/i, '').trim();
+          if (cleanSubj.length > 5) searchParts.push('subject:"' + cleanSubj + '"');
 
-        var statusColor = isGranted ? '#10b981' : '#ef4444';
-        var statusBadge = isGranted ? 'CONSENT GRANTED' : 'CONSENT DENIED';
+          if (searchParts.length > 0) {
+            var found = GmailApp.search(searchParts.join(' OR '), 0, 3);
+            if (found && found.length > 0) {
+              thread = found[0];
+              Logger.log('[FALLBACK-MATCH] Found thread via search query for notice ' + noticeId);
+            }
+          }
+        }
 
-        // ── RICH HTML EMAIL TEMPLATE ───────────────────────────
-        var htmlBody = [
-          '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Arial, sans-serif; max-width: 620px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; color: #1e293b; background: #ffffff;">',
-          '  <div style="background: #0f172a; color: #ffffff; padding: 18px 24px;">',
-          '    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #94a3b8; font-weight: 600;">DPDP Act 2023 Statutory Notice Response</div>',
-          '    <div style="font-size: 16px; font-weight: 700; margin-top: 4px; color: #f8fafc;">Digital Consent Status Confirmation</div>',
-          '  </div>',
-          '  <div style="padding: 24px;">',
-          '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 14px 0;">',
-          '      Dear <strong>' + fiduciaryName + '</strong>,',
-          '    </p>',
-          '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 18px 0; color: #334155;">',
-          '      The Data Principal <strong>' + principalName + '</strong> has recorded a formal decision regarding your consent notice under <strong>Section 6 of the Digital Personal Data Protection (DPDP) Act, 2023</strong>.',
-          '    </p>',
-          '    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">',
-          '      <div style="display: inline-block; background: ' + statusColor + '; color: #ffffff; padding: 4px 12px; border-radius: 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">' + statusBadge + '</div>',
-          '      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">',
-          '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b; width: 40%;">Notice Reference:</td><td style="padding: 6px 0; font-weight: 600;">' + noticeId + '</td></tr>',
-          (artifactId && artifactId !== 'N/A' ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Consent Artifact ID:</td><td style="padding: 6px 0; font-family: monospace; color: #2563eb; font-weight: 600;">' + artifactId + '</td></tr>' : ''),
-          '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Specified Purpose:</td><td style="padding: 6px 0;">' + purpose + '</td></tr>',
-          (selectedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Granted Attributes (' + selectedAttrs.length + '):</td><td style="padding: 6px 0; color: #16a34a; font-weight: 600;">' + selectedAttrs.join(', ') + '</td></tr>' : ''),
-          (deniedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Denied Attributes:</td><td style="padding: 6px 0; color: #dc2626;">' + deniedAttrs.join(', ') + '</td></tr>' : ''),
-          (remark ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Principal Remark:</td><td style="padding: 6px 0; font-style: italic;">' + remark + '</td></tr>' : ''),
-          '      </table>',
-          '    </div>',
-          (receiptHash && receiptHash !== 'N/A' ? [
-            '    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 18px;">',
-            '      <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">SHA-256 Digital Cryptographic Signature:</div>',
-            '      <div style="font-family: monospace; font-size: 11px; color: #0f766e; word-break: break-all;">' + receiptHash + '</div>',
-            '    </div>'
-          ].join('\n') : ''),
-          '    <div style="border-top: 1px solid #e2e8f0; padding-top: 14px; font-size: 11px; color: #94a3b8; text-align: center;">',
-          '      Secured by Data Principal Consent Manager • DPDP Act 2023 Standards Compliant',
-          '    </div>',
-          '  </div>',
-          '</div>'
-        ].join('\n');
+        // 3. Dispatch Delivery
+        if (thread) {
+          // Reply directly inside the existing Gmail thread!
+          thread.reply(plainText, {
+            htmlBody: htmlBody,
+            name: 'DPDP Privacy Portal'
+          });
+          Logger.log('[NOTIF-REPLIED] Replied on thread ' + thread.getId() + ' for notice ' + noticeId + ' (' + action + ')');
+        } else {
+          // Send direct email if original thread not located
+          GmailApp.sendEmail(recipientEmail, replySubject, plainText, {
+            htmlBody: htmlBody,
+            name: 'DPDP Privacy Portal'
+          });
+          Logger.log('[NOTIF-SENT] Dispatched direct email to ' + recipientEmail + ' for notice ' + noticeId);
+        }
 
-        // ── PLAIN TEXT FALLBACK ────────────────────────────────
-        var plainText = [
-          '=== DPDP ACT 2023 DIGITAL CONSENT STATUS UPDATE ===',
-          'Decision: ' + statusBadge,
-          'Notice ID: ' + noticeId,
-          (artifactId !== 'N/A' ? 'Artifact ID: ' + artifactId : ''),
-          'Data Principal: ' + principalName,
-          'Purpose: ' + purpose,
-          (selectedAttrs.length > 0 ? 'Granted Attributes: ' + selectedAttrs.join(', ') : ''),
-          (deniedAttrs.length > 0 ? 'Denied Attributes: ' + deniedAttrs.join(', ') : ''),
-          (receiptHash !== 'N/A' ? 'Digital Signature: ' + receiptHash : ''),
-          '==================================================='
-        ].filter(Boolean).join('\n');
-
-        // Reply directly on the existing thread in Gmail
-        thread.reply(plainText, {
-          htmlBody: htmlBody,
-          name: 'DPDP Privacy Portal'
-        });
-
-        Logger.log('[NOTIF-REPLIED] Replied on thread ' + item.thread_id + ' for notice ' + noticeId + ' (' + action + ')');
-
-        // Acknowledge notification to backend
+        // Acknowledge notification to backend so it's marked SENT
         UrlFetchApp.fetch(baseUrl + '/api/notifications/' + item.id + '/ack', {
           method: 'post',
           muteHttpExceptions: true
         });
 
       } catch (err) {
-        Logger.log('[NOTIF-ERROR] Failed to reply on thread ' + item.thread_id + ': ' + err.toString());
+        Logger.log('[NOTIF-ERROR] Failed to dispatch notification ' + item.id + ': ' + err.toString());
       }
     });
 

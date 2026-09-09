@@ -174,7 +174,7 @@ def init_db():
         id TEXT PRIMARY KEY,
         request_id TEXT NOT NULL,
         consent_id TEXT,
-        thread_id TEXT NOT NULL,
+        thread_id TEXT,
         message_id TEXT,
         recipient_email TEXT,
         fiduciary_name TEXT NOT NULL,

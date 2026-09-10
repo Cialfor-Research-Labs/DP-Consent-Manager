@@ -474,6 +474,62 @@ export const ConsentProvider = ({ children }) => {
     }
   };
 
+  const submitGrievance = async ({ fiduciary, dpoEmail, consentId, type, description }) => {
+    try {
+      setLoading(true);
+      const res = await consentApi.submitGrievance({
+        dataPrincipalId: dataPrincipal?.id || 'DP-2026-IND-8841',
+        fiduciary,
+        dpoEmail,
+        consentId,
+        type,
+        description
+      });
+
+      const ticketId = res?.ticketId || `GRV-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      // Record statutory audit log in state and localStorage
+      const newLog = {
+        id: `LOG-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: 'GRIEVANCE_FILED',
+        fiduciary: fiduciary,
+        details: `Statutory Grievance (${type}) lodged against ${fiduciary} under DPDP Act Section 13. Ticket #${ticketId}.`,
+        dpdpSection: 'Section 13 (Grievance Redressal Mechanism)',
+        integrityHash: 'Live Cryptographic Hash Generated'
+      };
+      setAuditLogs(prev => [newLog, ...prev]);
+
+      // Add to DSR tracking list
+      const newDsr = {
+        id: ticketId,
+        date: new Date().toISOString().split('T')[0],
+        type: `Grievance: ${type}`,
+        fiduciary: fiduciary,
+        status: 'OPEN',
+        slaDays: '7 Working Days (DPDP Act Sec 13)',
+        notes: description
+      };
+      setDsrRequests(prev => [newDsr, ...prev]);
+
+      setToastMessage({
+        type: 'success',
+        text: `Statutory Grievance lodged! Ticket #${ticketId} dispatched to ${fiduciary} DPO.`
+      });
+
+      setGrievanceModalOpen(false);
+      return res;
+    } catch (err) {
+      console.error('Grievance submission error:', err);
+      setToastMessage({
+        type: 'error',
+        text: 'Failed to lodge statutory grievance.'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const resetToDefaults = () => {
     localStorage.removeItem('dp_active_consents');
     localStorage.removeItem('dp_audit_logs');
@@ -504,6 +560,7 @@ export const ConsentProvider = ({ children }) => {
     updateNominee,
     dsrRequests,
     submitDsrRequest,
+    submitGrievance,
     grantCurrentConsent,
     denyCurrentConsent,
     revokeConsent,

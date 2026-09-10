@@ -24,7 +24,7 @@
 // ─── CONFIGURATION ──────────────────────────────────────────
 
 // Your current Cloudflare tunnel URL pointing to the FastAPI backend
-var BACKEND_WEBHOOK_URL = "https://organizational-microwave-wool-reflection.trycloudflare.com/api/gmail-webhook";
+var BACKEND_WEBHOOK_URL = "https://substitute-contacted-consultation-kirk.trycloudflare.com/api/gmail-webhook";
 
 // How many days back to scan for emails (prevents syncing your entire inbox)
 var LOOKBACK_DAYS = 7;
@@ -332,8 +332,9 @@ function dispatchPendingConsentReplies() {
     pendingList.forEach(function(item) {
       var details = item.details || {};
       var action = item.action || 'PROCESSED';
+      var isGrievance = (action === 'GRIEVANCE_FILED');
       var isGranted = (action === 'GRANTED');
-      var artifactId = item.artifact_id || (details.artifact ? details.artifact.consentId : 'N/A') || 'N/A';
+      var artifactId = item.artifact_id || (details.artifact ? details.artifact.consentId : 'N/A') || details.ticketId || 'N/A';
       var principalName = details.principalName || 'Data Principal';
       var fiduciaryName = item.fiduciary_name || details.fiduciaryName || 'Data Fiduciary';
       var noticeId = item.notice_id || details.noticeId || 'N/A';
@@ -346,62 +347,121 @@ function dispatchPendingConsentReplies() {
       var receiptHash = (details.artifact && details.artifact.receiptHash) ? details.artifact.receiptHash : 'N/A';
       var remark = details.remark || (details.artifact ? details.artifact.customNote : '') || '';
 
-      var statusColor = isGranted ? '#10b981' : '#ef4444';
-      var statusBadge = isGranted ? 'CONSENT GRANTED' : 'CONSENT DENIED';
+      var htmlBody = '';
+      var plainText = '';
+      var replySubject = '';
 
-      // ── RICH HTML EMAIL TEMPLATE ───────────────────────────
-      var htmlBody = [
-        '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Arial, sans-serif; max-width: 620px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; color: #1e293b; background: #ffffff;">',
-        '  <div style="background: #0f172a; color: #ffffff; padding: 18px 24px;">',
-        '    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #94a3b8; font-weight: 600;">DPDP Act 2023 Statutory Notice Response</div>',
-        '    <div style="font-size: 16px; font-weight: 700; margin-top: 4px; color: #f8fafc;">Digital Consent Status Confirmation</div>',
-        '  </div>',
-        '  <div style="padding: 24px;">',
-        '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 14px 0;">',
-        '      Dear <strong>' + fiduciaryName + '</strong>,',
-        '    </p>',
-        '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 18px 0; color: #334155;">',
-        '      The Data Principal <strong>' + principalName + '</strong> has recorded a formal decision regarding your consent notice under <strong>Section 6 of the Digital Personal Data Protection (DPDP) Act, 2023</strong>.',
-        '    </p>',
-        '    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">',
-        '      <div style="display: inline-block; background: ' + statusColor + '; color: #ffffff; padding: 4px 12px; border-radius: 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">' + statusBadge + '</div>',
-        '      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">',
-        '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b; width: 40%;">Notice Reference:</td><td style="padding: 6px 0; font-weight: 600;">' + noticeId + '</td></tr>',
-        (artifactId && artifactId !== 'N/A' ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Consent Artifact ID:</td><td style="padding: 6px 0; font-family: monospace; color: #2563eb; font-weight: 600;">' + artifactId + '</td></tr>' : ''),
-        '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Specified Purpose:</td><td style="padding: 6px 0;">' + purpose + '</td></tr>',
-        (selectedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Granted Attributes (' + selectedAttrs.length + '):</td><td style="padding: 6px 0; color: #16a34a; font-weight: 600;">' + selectedAttrs.join(', ') + '</td></tr>' : ''),
-        (deniedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Denied Attributes:</td><td style="padding: 6px 0; color: #dc2626;">' + deniedAttrs.join(', ') + '</td></tr>' : ''),
-        (remark ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Principal Remark:</td><td style="padding: 6px 0; font-style: italic;">' + remark + '</td></tr>' : ''),
-        '      </table>',
-        '    </div>',
-        (receiptHash && receiptHash !== 'N/A' ? [
-          '    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 18px;">',
-          '      <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">SHA-256 Digital Cryptographic Signature:</div>',
-          '      <div style="font-family: monospace; font-size: 11px; color: #0f766e; word-break: break-all;">' + receiptHash + '</div>',
-          '    </div>'
-        ].join('\n') : ''),
-        '    <div style="border-top: 1px solid #e2e8f0; padding-top: 14px; font-size: 11px; color: #94a3b8; text-align: center;">',
-        '      Secured by Data Principal Consent Manager • DPDP Act 2023 Standards Compliant',
-        '    </div>',
-        '  </div>',
-        '</div>'
-      ].join('\n');
+      if (isGrievance) {
+        // ── STATUTORY GRIEVANCE REDRESSAL NOTICE (DPDP ACT SEC 13) ──
+        var ticketId = artifactId !== 'N/A' ? artifactId : ('GRV-2026-' + Math.floor(1000 + Math.random() * 9000));
+        var gType = details.grievanceType || 'Unauthorized / Excess Processing';
+        var gDesc = details.description || remark || 'Statutory grievance lodged under DPDP Act Section 13.';
+        var assocConsent = item.consent_id || details.consentId || 'N/A';
 
-      // ── PLAIN TEXT FALLBACK ────────────────────────────────
-      var plainText = [
-        '=== DPDP ACT 2023 DIGITAL CONSENT STATUS UPDATE ===',
-        'Decision: ' + statusBadge,
-        'Notice ID: ' + noticeId,
-        (artifactId !== 'N/A' ? 'Artifact ID: ' + artifactId : ''),
-        'Data Principal: ' + principalName,
-        'Purpose: ' + purpose,
-        (selectedAttrs.length > 0 ? 'Granted Attributes: ' + selectedAttrs.join(', ') : ''),
-        (deniedAttrs.length > 0 ? 'Denied Attributes: ' + deniedAttrs.join(', ') : ''),
-        (receiptHash !== 'N/A' ? 'Digital Signature: ' + receiptHash : ''),
-        '==================================================='
-      ].filter(Boolean).join('\n');
+        replySubject = item.subject || ('[STATUTORY GRIEVANCE - ' + ticketId + '] DPDP Act Sec 13 Notice: ' + fiduciaryName);
 
-      var replySubject = item.subject || ('Re: ' + (originalSubject || ('Consent Notice ' + noticeId)));
+        htmlBody = [
+          '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Arial, sans-serif; max-width: 620px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; color: #1e293b; background: #ffffff;">',
+          '  <div style="background: #991b1b; color: #ffffff; padding: 18px 24px;">',
+          '    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #fecaca; font-weight: 600;">DPDP Act 2023 Statutory Grievance Notice</div>',
+          '    <div style="font-size: 16px; font-weight: 700; margin-top: 4px; color: #ffffff;">Formal Grievance Filed — Section 13</div>',
+          '  </div>',
+          '  <div style="padding: 24px;">',
+          '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 14px 0;">',
+          '      Attention: <strong>Data Protection Officer / Privacy Officer at ' + fiduciaryName + '</strong>,',
+          '    </p>',
+          '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 18px 0; color: #334155;">',
+          '      A formal statutory privacy grievance has been lodged against your organization by Data Principal <strong>' + principalName + '</strong> under <strong>Section 13 of the Digital Personal Data Protection (DPDP) Act, 2023</strong>.',
+          '    </p>',
+          '    <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin-bottom: 20px;">',
+          '      <div style="display: inline-block; background: #dc2626; color: #ffffff; padding: 4px 12px; border-radius: 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">STATUTORY GRIEVANCE LODGED</div>',
+          '      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">',
+          '        <tr style="border-bottom: 1px solid #fee2e2;"><td style="padding: 6px 0; color: #7f1d1d; width: 40%;">Ticket Number:</td><td style="padding: 6px 0; font-family: monospace; font-weight: 700; color: #991b1b;">' + ticketId + '</td></tr>',
+          '        <tr style="border-bottom: 1px solid #fee2e2;"><td style="padding: 6px 0; color: #7f1d1d;">Grievance Category:</td><td style="padding: 6px 0; font-weight: 600; color: #1e293b;">' + gType + '</td></tr>',
+          '        <tr style="border-bottom: 1px solid #fee2e2;"><td style="padding: 6px 0; color: #7f1d1d;">Data Principal:</td><td style="padding: 6px 0; font-weight: 600;">' + principalName + '</td></tr>',
+          '        <tr style="border-bottom: 1px solid #fee2e2;"><td style="padding: 6px 0; color: #7f1d1d;">Associated Consent ID:</td><td style="padding: 6px 0; font-family: monospace;">' + assocConsent + '</td></tr>',
+          '        <tr style="border-bottom: 1px solid #fee2e2;"><td style="padding: 6px 0; color: #7f1d1d;">Statutory Redressal SLA:</td><td style="padding: 6px 0; font-weight: 700; color: #b91c1c;">7 Working Days (DPDP Act Sec 13)</td></tr>',
+          '        <tr><td style="padding: 8px 0 4px 0; color: #7f1d1d; vertical-align: top;">Principal Statement:</td><td style="padding: 8px 0 4px 0; font-style: italic; color: #334155; line-height: 1.5;">"' + gDesc + '"</td></tr>',
+          '      </table>',
+          '    </div>',
+          '    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-bottom: 18px; font-size: 12px; color: #475569;">',
+          '      <strong>Mandatory Statutory Requirement:</strong> Under Section 13(2) of the DPDP Act 2023, the Data Fiduciary is required to respond to and resolve grievances within the prescribed timeframe. Continued non-compliance may be escalated by the Data Principal to the Data Protection Board of India (DPBI).',
+          '    </div>',
+          '    <div style="border-top: 1px solid #e2e8f0; padding-top: 14px; font-size: 11px; color: #94a3b8; text-align: center;">',
+          '      Dispatched via Data Principal Consent Manager • DPDP Act 2023 Grievance Redressal Gateway',
+          '    </div>',
+          '  </div>',
+          '</div>'
+        ].join('\n');
+
+        plainText = [
+          '=== DPDP ACT 2023 STATUTORY GRIEVANCE NOTICE (SECTION 13) ===',
+          'Ticket Number: ' + ticketId,
+          'Data Fiduciary: ' + fiduciaryName,
+          'Data Principal: ' + principalName,
+          'Grievance Category: ' + gType,
+          'Associated Consent ID: ' + assocConsent,
+          'Statutory SLA: 7 Working Days (DPDP Act Sec 13)',
+          'Principal Statement: ' + gDesc,
+          '============================================================'
+        ].join('\n');
+
+      } else {
+        // ── CONSENT DECISION TEMPLATE (GRANTED / DENIED) ──
+        var statusColor = isGranted ? '#10b981' : '#ef4444';
+        var statusBadge = isGranted ? 'CONSENT GRANTED' : 'CONSENT DENIED';
+        replySubject = item.subject || ('Re: ' + (originalSubject || ('Consent Notice ' + noticeId)));
+
+        htmlBody = [
+          '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Arial, sans-serif; max-width: 620px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; color: #1e293b; background: #ffffff;">',
+          '  <div style="background: #0f172a; color: #ffffff; padding: 18px 24px;">',
+          '    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #94a3b8; font-weight: 600;">DPDP Act 2023 Statutory Notice Response</div>',
+          '    <div style="font-size: 16px; font-weight: 700; margin-top: 4px; color: #f8fafc;">Digital Consent Status Confirmation</div>',
+          '  </div>',
+          '  <div style="padding: 24px;">',
+          '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 14px 0;">',
+          '      Dear <strong>' + fiduciaryName + '</strong>,',
+          '    </p>',
+          '    <p style="font-size: 14px; line-height: 1.6; margin: 0 0 18px 0; color: #334155;">',
+          '      The Data Principal <strong>' + principalName + '</strong> has recorded a formal decision regarding your consent notice under <strong>Section 6 of the Digital Personal Data Protection (DPDP) Act, 2023</strong>.',
+          '    </p>',
+          '    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">',
+          '      <div style="display: inline-block; background: ' + statusColor + '; color: #ffffff; padding: 4px 12px; border-radius: 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">' + statusBadge + '</div>',
+          '      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">',
+          '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b; width: 40%;">Notice Reference:</td><td style="padding: 6px 0; font-weight: 600;">' + noticeId + '</td></tr>',
+          (artifactId && artifactId !== 'N/A' ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Consent Artifact ID:</td><td style="padding: 6px 0; font-family: monospace; color: #2563eb; font-weight: 600;">' + artifactId + '</td></tr>' : ''),
+          '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Specified Purpose:</td><td style="padding: 6px 0;">' + purpose + '</td></tr>',
+          (selectedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Granted Attributes (' + selectedAttrs.length + '):</td><td style="padding: 6px 0; color: #16a34a; font-weight: 600;">' + selectedAttrs.join(', ') + '</td></tr>' : ''),
+          (deniedAttrs.length > 0 ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Denied Attributes:</td><td style="padding: 6px 0; color: #dc2626;">' + deniedAttrs.join(', ') + '</td></tr>' : ''),
+          (remark ? '        <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 6px 0; color: #64748b;">Principal Remark:</td><td style="padding: 6px 0; font-style: italic;">' + remark + '</td></tr>' : ''),
+          '      </table>',
+          '    </div>',
+          (receiptHash && receiptHash !== 'N/A' ? [
+            '    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 18px;">',
+            '      <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">SHA-256 Digital Cryptographic Signature:</div>',
+            '      <div style="font-family: monospace; font-size: 11px; color: #0f766e; word-break: break-all;">' + receiptHash + '</div>',
+            '    </div>'
+          ].join('\n') : ''),
+          '    <div style="border-top: 1px solid #e2e8f0; padding-top: 14px; font-size: 11px; color: #94a3b8; text-align: center;">',
+          '      Secured by Data Principal Consent Manager • DPDP Act 2023 Standards Compliant',
+          '    </div>',
+          '  </div>',
+          '</div>'
+        ].join('\n');
+
+        plainText = [
+          '=== DPDP ACT 2023 DIGITAL CONSENT STATUS UPDATE ===',
+          'Decision: ' + statusBadge,
+          'Notice ID: ' + noticeId,
+          (artifactId !== 'N/A' ? 'Artifact ID: ' + artifactId : ''),
+          'Data Principal: ' + principalName,
+          'Purpose: ' + purpose,
+          (selectedAttrs.length > 0 ? 'Granted Attributes: ' + selectedAttrs.join(', ') : ''),
+          (deniedAttrs.length > 0 ? 'Denied Attributes: ' + deniedAttrs.join(', ') : ''),
+          (receiptHash !== 'N/A' ? 'Digital Signature: ' + receiptHash : ''),
+          '==================================================='
+        ].filter(Boolean).join('\n');
+      }
 
       try {
         var thread = null;

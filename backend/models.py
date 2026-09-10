@@ -52,4 +52,13 @@ class EmailIngestPayload(BaseModel):
     thread_id: Optional[str] = None
     message_id: Optional[str] = None
 
+class GrievancePayload(BaseModel):
+    dataPrincipalId: Optional[str] = None
+    fiduciary: str
+    dpoEmail: Optional[str] = None
+    consentId: Optional[str] = None
+    noticeId: Optional[str] = None
+    type: str
+    description: str
+
 

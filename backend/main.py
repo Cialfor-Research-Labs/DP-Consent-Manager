@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from database import get_db, init_db, generate_sha256_signature, generate_data_principal_id, generate_unpredictable_token
-from models import DecisionPayload, RevokePayload, DSRRequestPayload, ConsentRequestCreatePayload, EmailIngestPayload
+from models import DecisionPayload, RevokePayload, DSRRequestPayload, ConsentRequestCreatePayload, EmailIngestPayload, GrievancePayload
 
 # Initialize database tables and seed records
 init_db()
@@ -1451,6 +1451,143 @@ def list_dsr_requests(principalId: Optional[str] = Query(None)):
         d["createdAt"] = d["created_at"]
         results.append(d)
     return results
+
+@app.post("/api/grievance")
+def submit_grievance(payload: GrievancePayload):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    ticket_id = f"GRV-2026-{random.randint(1000, 9999)}"
+    now = datetime.utcnow()
+    now_str = now.isoformat() + "Z"
+    sla = (now + timedelta(days=7)).isoformat() + "Z"  # Statutory 7 working days SLA under DPDP Sec 13
+    dp_id = payload.dataPrincipalId or generate_data_principal_id("pandeyprerna1407@gmail.com")
+
+    # Look up fiduciary metadata, thread_id, and contact info
+    thread_id = None
+    original_message_id = None
+    original_subject = None
+    recipient_email = payload.dpoEmail
+
+    # Try looking up via consent_requests
+    cursor.execute("""
+    SELECT * FROM consent_requests 
+    WHERE fiduciary_name = ? OR notice_id = ? OR id = ?
+    ORDER BY created_at DESC LIMIT 1;
+    """, (payload.fiduciary, payload.noticeId, payload.consentId))
+    matched_req = cursor.fetchone()
+
+    if matched_req:
+        req_dict = dict(matched_req)
+        thread_id = req_dict.get("thread_id")
+        original_message_id = req_dict.get("message_id")
+        if req_dict.get("email_snapshot_id"):
+            cursor.execute("SELECT from_address, thread_id, message_id, subject FROM email_snapshots WHERE id = ?;", (req_dict["email_snapshot_id"],))
+            es_row = cursor.fetchone()
+            if es_row:
+                if not thread_id and es_row["thread_id"]:
+                    thread_id = es_row["thread_id"]
+                if not original_message_id and es_row["message_id"]:
+                    original_message_id = es_row["message_id"]
+                if es_row["subject"]:
+                    original_subject = es_row["subject"]
+                raw_from = es_row["from_address"] or ""
+                match = re.search(r'<([^>]+)>', raw_from)
+                actual_sender = match.group(1).strip() if match else (raw_from.strip() if "@" in raw_from else None)
+                if not recipient_email and actual_sender:
+                    recipient_email = actual_sender
+
+        if not recipient_email:
+            recipient_email = req_dict.get("dpo_email") or req_dict.get("fiduciary_email")
+
+    if not recipient_email:
+        recipient_email = payload.dpoEmail or "dpo@fiduciary.org"
+
+    # 1. Insert into data_rights_requests
+    grievance_details = {
+        "ticketId": ticket_id,
+        "type": payload.type,
+        "consentId": payload.consentId,
+        "noticeId": payload.noticeId,
+        "description": payload.description,
+        "dpoEmail": recipient_email,
+        "statutoryBasis": "Digital Personal Data Protection Act 2023 - Section 13 (Grievance Redressal)"
+    }
+    cursor.execute("""
+    INSERT INTO data_rights_requests (id, data_principal_id, request_type, target_fiduciary, details, status, sla_deadline, created_at)
+    VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?);
+    """, (
+        ticket_id,
+        dp_id,
+        f"GRIEVANCE_{payload.type}",
+        payload.fiduciary,
+        json.dumps(grievance_details),
+        sla,
+        now_str
+    ))
+
+    # 2. Insert into audit_events
+    cursor.execute("""
+    INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+    VALUES (?, ?, ?, ?, 'GRIEVANCE_FILED', ?, ?, ?, '103.21.124.88', ?, 'ACTIVE');
+    """, (
+        f"AUD-{random.randint(100, 999)}",
+        ticket_id,
+        payload.consentId or "N/A",
+        dp_id,
+        payload.fiduciary,
+        payload.noticeId or "N/A",
+        f"Statutory Grievance ({payload.type}) lodged under DPDP Act Section 13. Ticket #{ticket_id}. SLA: 7 Working Days.",
+        now_str
+    ))
+
+    # 3. Queue statutory notice into fiduciary_notifications
+    notif_id = f"NOTIF-2026-{random.randint(1000, 9999)}"
+    notif_details = {
+        "action": "GRIEVANCE_FILED",
+        "ticketId": ticket_id,
+        "grievanceType": payload.type,
+        "description": payload.description,
+        "consentId": payload.consentId or "N/A",
+        "noticeId": payload.noticeId or "N/A",
+        "fiduciaryName": payload.fiduciary,
+        "recipientEmail": recipient_email,
+        "principalName": "Prerna Pandey",
+        "principalEmail": "pandeyprerna1407@gmail.com",
+        "slaDeadline": sla,
+        "originalSubject": original_subject
+    }
+
+    grievance_subject = f"[STATUTORY GRIEVANCE - {ticket_id}] Data Principal Notice to {payload.fiduciary} — DPDP Act Sec 13"
+
+    cursor.execute("""
+    INSERT INTO fiduciary_notifications (id, request_id, consent_id, thread_id, message_id, recipient_email, fiduciary_name, action, artifact_id, subject, details_json, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'GRIEVANCE_FILED', ?, ?, ?, 'PENDING', ?);
+    """, (
+        notif_id,
+        ticket_id,
+        payload.consentId,
+        thread_id,
+        original_message_id,
+        recipient_email,
+        payload.fiduciary,
+        ticket_id,
+        grievance_subject,
+        json.dumps(notif_details),
+        now_str
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "message": f"Statutory grievance {ticket_id} filed successfully under DPDP Act Section 13.",
+        "ticketId": ticket_id,
+        "slaDeadline": sla,
+        "status": "OPEN",
+        "fiduciary": payload.fiduciary
+    }
 
 if __name__ == "__main__":
     print("====================================================")

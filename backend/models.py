@@ -61,4 +61,15 @@ class GrievancePayload(BaseModel):
     type: str
     description: str
 
+class NomineePayload(BaseModel):
+    dataPrincipalId: Optional[str] = None
+    principalEmail: Optional[str] = None
+    nomineeName: str
+    relationship: str
+    contactPhone: str
+    contactEmail: str
+    idType: str
+    idNumber: str
+
+
 

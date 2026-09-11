@@ -109,6 +109,30 @@ export const ConsentProvider = ({ children }) => {
 
   const t = (key) => getTranslation(language, key);
 
+  // Theme State: 'dark' or 'light'
+  const [theme, setThemeState] = useState(() => {
+    return localStorage.getItem('dp_theme') || 'dark';
+  });
+
+  const setTheme = (newTheme) => {
+    setThemeState(newTheme);
+    localStorage.setItem('dp_theme', newTheme);
+    document.documentElement.setAttribute('data-theme', newTheme);
+  };
+
+  const toggleTheme = () => {
+    setThemeState(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('dp_theme', next);
+      document.documentElement.setAttribute('data-theme', next);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
   // Selected attributes map for the active scenario: { attr_id: boolean }
   const [selectedAttributes, setSelectedAttributes] = useState({});
 
@@ -664,6 +688,9 @@ export const ConsentProvider = ({ children }) => {
     setLanguage,
     INDIC_LANGUAGES,
     t,
+    theme,
+    setTheme,
+    toggleTheme,
     selectedAttributes,
     toggleAttribute,
     activeConsents,

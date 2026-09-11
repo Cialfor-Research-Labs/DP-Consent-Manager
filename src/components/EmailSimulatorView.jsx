@@ -52,7 +52,7 @@ export const EmailSimulatorView = () => {
           <Mail size={14} />
           <span>ORIGINATING EMAIL SNAPSHOT MIRROR</span>
         </div>
-        <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'white', marginBottom: '4px' }}>
+        <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
           Exact Originating Consent Request Email
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', maxWidth: '680px', margin: '0 auto' }}>
@@ -143,7 +143,7 @@ export const EmailSimulatorView = () => {
                 <FileText size={20} />
               </div>
               <div>
-                <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'white' }}>
+                <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                   Statutory_Privacy_Notice_{currentScenario.noticeId}.pdf
                 </div>
                 <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>

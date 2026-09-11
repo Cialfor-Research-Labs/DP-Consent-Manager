@@ -17,7 +17,7 @@ export const AuditLogView = () => {
           <Lock size={20} style={{ color: '#818cf8' }} />
           <div>
             <div style={{ fontSize: '0.75rem', color: '#a5b4fc', fontWeight: 700 }}>Registry Integrity</div>
-            <div style={{ fontSize: '0.88rem', color: 'white', fontWeight: 600 }}>Tamper-Evident Hash Chain</div>
+            <div style={{ fontSize: '0.88rem', color: 'var(--text-primary)', fontWeight: 600 }}>Tamper-Evident Hash Chain</div>
           </div>
         </div>
       </div>
@@ -59,11 +59,11 @@ export const AuditLogView = () => {
                       {log.action.replace('_', ' ')}
                     </span>
                   </td>
-                  <td style={{ fontWeight: 600, color: 'white' }}>{log.fiduciary}</td>
+                  <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{log.fiduciary}</td>
                   <td>
                     <code style={{ fontSize: '0.8rem', color: '#60a5fa' }}>{log.consentId}</code>
                   </td>
-                  <td style={{ fontSize: '0.85rem', color: '#cbd5e1', maxWidth: '300px' }}>
+                  <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', maxWidth: '300px' }}>
                     {log.details}
                   </td>
                   <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>

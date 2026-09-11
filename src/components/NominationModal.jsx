@@ -89,7 +89,7 @@ export const NominationModal = () => {
               </label>
               <select 
                 className="btn-secondary"
-                style={{ width: '100%', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', background: '#1e293b', color: 'white' }}
+                style={{ width: '100%', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                 value={relationship}
                 onChange={(e) => setRelationship(e.target.value)}
               >
@@ -140,7 +140,7 @@ export const NominationModal = () => {
               </label>
               <select 
                 className="btn-secondary"
-                style={{ width: '100%', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', background: '#1e293b', color: 'white' }}
+                style={{ width: '100%', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                 value={idType}
                 onChange={(e) => setIdType(e.target.value)}
               >

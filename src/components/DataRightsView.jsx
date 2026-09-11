@@ -151,7 +151,7 @@ export const DataRightsView = () => {
               <Trash2 size={24} />
             </div>
             <div>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'white' }}>Right to Erasure & Data Deletion (DPDP Sec 12)</h2>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>Right to Erasure & Data Deletion (DPDP Sec 12)</h2>
               <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
                 Request complete erasure of personal data previously collected by a Data Fiduciary once the specified purpose is fulfilled or consent is withdrawn.
               </p>
@@ -165,7 +165,7 @@ export const DataRightsView = () => {
               </label>
               <select 
                 className="btn-secondary"
-                style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: '#1e293b', color: 'white' }}
+                style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                 value={erasureFiduciary}
                 onChange={(e) => setErasureFiduciary(e.target.value)}
                 required
@@ -184,7 +184,7 @@ export const DataRightsView = () => {
               </label>
               <select 
                 className="btn-secondary"
-                style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: '#1e293b', color: 'white' }}
+                style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                 value={erasureScope}
                 onChange={(e) => setErasureScope(e.target.value)}
               >
@@ -233,7 +233,7 @@ export const DataRightsView = () => {
               <Edit3 size={24} />
             </div>
             <div>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'white' }}>Right to Data Correction & Updating (DPDP Sec 11)</h2>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>Right to Data Correction & Updating (DPDP Sec 11)</h2>
               <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
                 Request correction, completion, or updating of inaccurate or outdated personal data processed by Data Fiduciaries.
               </p>
@@ -247,7 +247,7 @@ export const DataRightsView = () => {
               </label>
               <select 
                 className="btn-secondary"
-                style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: '#1e293b', color: 'white' }}
+                style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                 value={correctionFiduciary}
                 onChange={(e) => setCorrectionFiduciary(e.target.value)}
                 required
@@ -387,7 +387,7 @@ export const DataRightsView = () => {
                   <span className="badge badge-verified" style={{ marginBottom: '8px' }}>
                     <CheckCircle2 size={12} /> DPDP Verified Statutory Nominee
                   </span>
-                  <h3 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'white', marginTop: '4px' }}>
+                  <h3 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
                     {nominee.nomineeName}
                   </h3>
                   <div style={{ fontSize: '0.9rem', color: '#818cf8', fontWeight: 600, marginTop: '2px' }}>
@@ -397,22 +397,22 @@ export const DataRightsView = () => {
 
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Designated Date</div>
-                  <div style={{ fontSize: '0.95rem', color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.dateDesignated || new Date().toISOString().split('T')[0]}</div>
+                  <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', fontWeight: 600, marginTop: '2px' }}>{nominee.dateDesignated || new Date().toISOString().split('T')[0]}</div>
                 </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
                 <div>
                   <span style={{ color: 'var(--text-muted)' }}>Contact Phone:</span>
-                  <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.contactPhone}</div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginTop: '2px' }}>{nominee.contactPhone}</div>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)' }}>Contact Email:</span>
-                  <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.contactEmail}</div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginTop: '2px' }}>{nominee.contactEmail}</div>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)' }}>Identity Proof:</span>
-                  <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.idType} ({nominee.idNumber})</div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginTop: '2px' }}>{nominee.idType} ({nominee.idNumber})</div>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)' }}>Statutory Status:</span>
@@ -425,7 +425,7 @@ export const DataRightsView = () => {
               <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px auto', color: '#818cf8' }}>
                 <UserPlus size={28} />
               </div>
-              <h3 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'white', marginBottom: '8px' }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
                 No Statutory Nominee Assigned Yet
               </h3>
               <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', maxWidth: '560px', margin: '0 auto 20px auto', lineHeight: '1.6' }}>

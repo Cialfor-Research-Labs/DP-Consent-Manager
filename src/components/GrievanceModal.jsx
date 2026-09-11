@@ -47,7 +47,7 @@ export const GrievanceModal = () => {
             </label>
             <select 
               className="btn-secondary"
-              style={{ width: '100%', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', background: '#1e293b', color: 'white' }}
+              style={{ width: '100%', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
               value={type}
               onChange={(e) => setType(e.target.value)}
             >

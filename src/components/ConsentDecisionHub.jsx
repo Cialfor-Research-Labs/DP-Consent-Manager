@@ -221,7 +221,7 @@ export const ConsentDecisionHub = () => {
         {/* Sidebar Column */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <div className="glass-card sidebar-info-card">
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'white', display: 'flex', alignItems: 'center', gap: '10px', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '10px', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
               <Shield size={18} style={{ color: '#818cf8' }} /> {t('noticeComplianceTitle')}
             </h3>
 

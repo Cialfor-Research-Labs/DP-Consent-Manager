@@ -101,17 +101,17 @@ Cialfor Research Labs Private Limited`);
               <Mail size={20} />
             </div>
             <div>
-              <h3 style={{ margin: 0, fontSize: '1.15rem', color: 'white', fontWeight: 700 }}>
+              <h3 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--text-primary)', fontWeight: 700 }}>
                 Instant Email & Notice Ingestion Tool
               </h3>
-              <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
+              <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                 Ingest ANY custom email notice body and subject into the Consent Manager
               </p>
             </div>
           </div>
           <button 
             onClick={onClose} 
-            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '4px' }}
           >
             <X size={20} />
           </button>
@@ -120,50 +120,50 @@ Cialfor Research Labs Private Limited`);
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div>
-              <label style={{ fontSize: '0.76rem', color: '#cbd5e1', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
                 To Email (Data Principal)
               </label>
               <input 
                 type="text" 
                 value={toAddress} 
                 onChange={e => setToAddress(e.target.value)}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: '#0f172a', border: '1px solid #334155', color: 'white', fontSize: '0.85rem' }}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
               />
             </div>
             <div>
-              <label style={{ fontSize: '0.76rem', color: '#cbd5e1', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
                 Fiduciary Name
               </label>
               <input 
                 type="text" 
                 value={fiduciaryName} 
                 onChange={e => setFiduciaryName(e.target.value)}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: '#0f172a', border: '1px solid #334155', color: 'white', fontSize: '0.85rem' }}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
               />
             </div>
           </div>
 
           <div>
-            <label style={{ fontSize: '0.76rem', color: '#cbd5e1', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+            <label style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
               Email Subject
             </label>
             <input 
               type="text" 
               value={subject} 
               onChange={e => setSubject(e.target.value)}
-              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: '#0f172a', border: '1px solid #334155', color: '#60a5fa', fontWeight: 600, fontSize: '0.88rem' }}
+              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: '#6366f1', fontWeight: 600, fontSize: '0.88rem' }}
             />
           </div>
 
           <div>
-            <label style={{ fontSize: '0.76rem', color: '#cbd5e1', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+            <label style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
               Email Body Text
             </label>
             <textarea 
               rows={8}
               value={bodyText} 
               onChange={e => setBodyText(e.target.value)}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', background: '#0f172a', border: '1px solid #334155', color: 'white', fontSize: '0.82rem', fontFamily: 'inherit', lineHeight: '1.4' }}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', fontSize: '0.82rem', fontFamily: 'inherit', lineHeight: '1.4' }}
             />
           </div>
 

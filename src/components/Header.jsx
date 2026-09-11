@@ -1,6 +1,6 @@
 import React from 'react';
 import { useConsent } from '../context/ConsentContext';
-import { ShieldCheck, Mail, CheckCircle2, History, Languages } from 'lucide-react';
+import { ShieldCheck, Mail, CheckCircle2, History, Languages, Sun, Moon } from 'lucide-react';
 
 export const Header = () => {
   const { 
@@ -11,7 +11,9 @@ export const Header = () => {
     language,
     setLanguage,
     INDIC_LANGUAGES,
-    t
+    t,
+    theme,
+    toggleTheme
   } = useConsent();
 
   const activeCount = activeConsents.filter(c => c.status === 'ACTIVE').length;
@@ -79,12 +81,22 @@ export const Header = () => {
           </div>
         </div>
 
+        {/* Color Mode / Theme Toggle */}
+        <button 
+          className="theme-toggle-btn"
+          onClick={toggleTheme}
+          title={theme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
+          aria-label="Toggle Color Theme"
+        >
+          {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        </button>
+
         <div className="user-profile-badge" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
           <div className="user-avatar">
             {dataPrincipal.name ? dataPrincipal.name.charAt(0) : 'P'}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2' }}>
-            <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap' }}>{dataPrincipal.name}</span>
+            <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{dataPrincipal.name}</span>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{dataPrincipal.email}</span>
           </div>
         </div>

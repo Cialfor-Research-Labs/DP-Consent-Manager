@@ -76,7 +76,7 @@ export const ActiveConsentsView = () => {
             placeholder="Search fiduciary, consent ID, or purpose..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ background: 'transparent', border: 'none', color: 'white', width: '100%', outline: 'none', fontSize: '0.92rem' }}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', width: '100%', outline: 'none', fontSize: '0.92rem' }}
           />
         </div>
 
@@ -84,29 +84,26 @@ export const ActiveConsentsView = () => {
           <button 
             className={`btn btn-sm ${filterStatus === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setFilterStatus('ALL')}
-            style={{ padding: '8px 16px' }}
           >
-            All Records ({activeConsents.length})
+            All Consents ({activeConsents.length})
           </button>
           <button 
             className={`btn btn-sm ${filterStatus === 'ACTIVE' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setFilterStatus('ACTIVE')}
-            style={{ padding: '8px 16px' }}
           >
             Active ({activeCount})
           </button>
           <button 
             className={`btn btn-sm ${filterStatus === 'REVOKED' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setFilterStatus('REVOKED')}
-            style={{ padding: '8px 16px' }}
           >
             Revoked ({revokedCount})
           </button>
         </div>
       </div>
 
-      {/* Consent Cards Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(480px, 1fr))', gap: '28px' }}>
+      {/* Grid of Consents */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
         {filteredConsents.map((consent, cardIdx) => {
           const isActive = consent.status === 'ACTIVE';
           const consentId = consent.consentId || consent.consent_id || `CNST-REC-${cardIdx}`;
@@ -124,7 +121,7 @@ export const ActiveConsentsView = () => {
                 borderLeft: isActive ? '4px solid #10b981' : '4px solid #ef4444',
                 display: 'flex',
                 flexDirection: 'column',
-                justify: 'space-between',
+                justifyContent: 'space-between',
                 padding: '28px 32px'
               }}
             >
@@ -135,7 +132,7 @@ export const ActiveConsentsView = () => {
                       {consent.fiduciaryLogo || consent.fiduciary_logo || '🏛️'}
                     </div>
                     <div>
-                      <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'white' }}>
+                      <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                         {consent.fiduciary || consent.fiduciary_name}
                       </h3>
                       <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
@@ -151,7 +148,7 @@ export const ActiveConsentsView = () => {
                 </div>
 
                 {/* Purpose */}
-                <p style={{ fontSize: '0.92rem', color: '#cbd5e1', marginBottom: '20px', lineHeight: '1.6' }}>
+                <p style={{ fontSize: '0.92rem', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: '1.6' }}>
                   {consent.purpose}
                 </p>
 
@@ -232,7 +229,7 @@ export const ActiveConsentsView = () => {
               <button className="close-btn" onClick={() => setRevokingConsentId(null)}>✕</button>
             </div>
 
-            <p style={{ color: '#cbd5e1', marginBottom: '20px', lineHeight: '1.65' }}>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: '1.65' }}>
               Under Section 6(4) of the DPDP Act 2023, you are revoking consent ID <strong>{revokingConsentId}</strong>. 
               The Data Fiduciary will be immediately instructed to cease data processing and erase non-statutory records.
             </p>
@@ -244,7 +241,7 @@ export const ActiveConsentsView = () => {
                 </label>
                 <select 
                   className="btn-secondary"
-                  style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: '#1e293b', color: 'white' }}
+                  style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                   value={revokeReason}
                   onChange={(e) => setRevokeReason(e.target.value)}
                 >

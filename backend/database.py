@@ -188,6 +188,24 @@ def init_db():
     );
     """)
 
+    # 9. Statutory Nominees Table (DPDP Act Section 14)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS statutory_nominees (
+        id TEXT PRIMARY KEY,
+        data_principal_id TEXT NOT NULL,
+        principal_email TEXT,
+        nominee_name TEXT NOT NULL,
+        relationship TEXT NOT NULL,
+        contact_phone TEXT NOT NULL,
+        contact_email TEXT NOT NULL,
+        id_type TEXT NOT NULL,
+        id_number TEXT NOT NULL,
+        status TEXT DEFAULT 'ACTIVE_VERIFIED',
+        date_designated TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
     # Auto-add thread_id and message_id columns to existing tables if missing
     for tbl in ["consent_requests", "email_snapshots"]:
         try:

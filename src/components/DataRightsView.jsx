@@ -21,6 +21,8 @@ export const DataRightsView = () => {
     activeConsents, 
     auditLogs, 
     nominee, 
+    removeNominee,
+    dataPrincipal,
     setNominationModalOpen, 
     dsrRequests, 
     submitErasureRequest, 
@@ -82,11 +84,25 @@ export const DataRightsView = () => {
 
         <div style={{ background: 'rgba(99, 102, 241, 0.1)', border: '1px solid var(--border-highlight)', padding: '16px 24px', borderRadius: '16px', textAlign: 'right' }}>
           <div style={{ fontSize: '0.78rem', color: '#a5b4fc', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Active Nominee Status
+            Statutory Nominee Status
           </div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#ffffff', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px' }}>
-            <UserCheck size={18} style={{ color: '#34d399' }} />
-            {nominee.nomineeName} ({nominee.relationship})
+          <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#ffffff', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px' }}>
+            {nominee ? (
+              <>
+                <UserCheck size={18} style={{ color: '#34d399' }} />
+                <span>{nominee.nomineeName} ({nominee.relationship})</span>
+              </>
+            ) : (
+              <>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: 500 }}>Not Designated</span>
+                <button 
+                  onClick={() => setNominationModalOpen(true)}
+                  style={{ background: '#6366f1', color: '#ffffff', border: 'none', borderRadius: '6px', padding: '4px 10px', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', marginLeft: '6px' }}
+                >
+                  + Assign
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -326,59 +342,105 @@ export const DataRightsView = () => {
               <div>
                 <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'white' }}>Right to Nominate (DPDP Sec 14)</h2>
                 <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-                  Designate a nominee who shall exercise your privacy rights in event of death or incapacity under Section 14.
+                  Data Principal: <strong style={{ color: '#e2e8f0' }}>{dataPrincipal.name}</strong> ({dataPrincipal.email})
                 </p>
               </div>
             </div>
 
-            <button 
-              className="btn btn-primary"
-              onClick={() => setNominationModalOpen(true)}
-            >
-              <UserPlus size={16} />
-              Update Nominee
-            </button>
+            {nominee ? (
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button 
+                  className="btn btn-primary"
+                  onClick={() => setNominationModalOpen(true)}
+                >
+                  <UserPlus size={16} />
+                  Change Nominee
+                </button>
+                <button 
+                  className="btn btn-secondary"
+                  style={{ borderColor: 'rgba(239, 68, 68, 0.4)', color: '#f87171' }}
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to revoke this statutory nominee designation under DPDP Act Section 14?')) {
+                      removeNominee();
+                    }
+                  }}
+                >
+                  <Trash2 size={16} />
+                  Revoke
+                </button>
+              </div>
+            ) : (
+              <button 
+                className="btn btn-primary"
+                onClick={() => setNominationModalOpen(true)}
+              >
+                <UserPlus size={16} />
+                + Assign Nominee
+              </button>
+            )}
           </div>
 
-          <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color)', borderRadius: '16px', padding: '24px', marginBottom: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-              <div>
-                <span className="badge badge-verified" style={{ marginBottom: '8px' }}>
-                  <CheckCircle2 size={12} /> DPDP Verified Statutory Nominee
-                </span>
-                <h3 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'white', marginTop: '4px' }}>
-                  {nominee.nomineeName}
-                </h3>
-                <div style={{ fontSize: '0.9rem', color: '#818cf8', fontWeight: 600, marginTop: '2px' }}>
-                  Relationship: {nominee.relationship}
+          {nominee ? (
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color)', borderRadius: '16px', padding: '24px', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                <div>
+                  <span className="badge badge-verified" style={{ marginBottom: '8px' }}>
+                    <CheckCircle2 size={12} /> DPDP Verified Statutory Nominee
+                  </span>
+                  <h3 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'white', marginTop: '4px' }}>
+                    {nominee.nomineeName}
+                  </h3>
+                  <div style={{ fontSize: '0.9rem', color: '#818cf8', fontWeight: 600, marginTop: '2px' }}>
+                    Relationship: {nominee.relationship}
+                  </div>
+                </div>
+
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Designated Date</div>
+                  <div style={{ fontSize: '0.95rem', color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.dateDesignated || new Date().toISOString().split('T')[0]}</div>
                 </div>
               </div>
 
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Designated Date</div>
-                <div style={{ fontSize: '0.95rem', color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.dateDesignated}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Contact Phone:</span>
+                  <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.contactPhone}</div>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Contact Email:</span>
+                  <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.contactEmail}</div>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Identity Proof:</span>
+                  <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.idType} ({nominee.idNumber})</div>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Statutory Status:</span>
+                  <div style={{ color: '#34d399', fontWeight: 600, marginTop: '2px' }}>Active & Registered</div>
+                </div>
               </div>
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
-              <div>
-                <span style={{ color: 'var(--text-muted)' }}>Contact Phone:</span>
-                <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.contactPhone}</div>
+          ) : (
+            <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '2px dashed rgba(255, 255, 255, 0.12)', borderRadius: '16px', padding: '36px 24px', textAlign: 'center', marginBottom: '24px' }}>
+              <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px auto', color: '#818cf8' }}>
+                <UserPlus size={28} />
               </div>
-              <div>
-                <span style={{ color: 'var(--text-muted)' }}>Contact Email:</span>
-                <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.contactEmail}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-muted)' }}>Identity Proof:</span>
-                <div style={{ color: 'white', fontWeight: 600, marginTop: '2px' }}>{nominee.idType} ({nominee.idNumber})</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-muted)' }}>Status:</span>
-                <div style={{ color: '#34d399', fontWeight: 600, marginTop: '2px' }}>Active & Registered</div>
-              </div>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'white', marginBottom: '8px' }}>
+                No Statutory Nominee Assigned Yet
+              </h3>
+              <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', maxWidth: '560px', margin: '0 auto 20px auto', lineHeight: '1.6' }}>
+                Under Section 14 of the Digital Personal Data Protection Act 2023, you have the statutory legal right to designate an authorized individual who can exercise your consent management, data rights, and grievance redressal in the event of death or incapacity.
+              </p>
+              <button 
+                className="btn btn-primary"
+                style={{ padding: '12px 28px', fontSize: '0.95rem' }}
+                onClick={() => setNominationModalOpen(true)}
+              >
+                <UserPlus size={18} />
+                + Assign Your Statutory Nominee
+              </button>
             </div>
-          </div>
+          )}
 
           <div style={{ background: 'rgba(99, 102, 241, 0.06)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '16px 20px', borderRadius: '12px', fontSize: '0.85rem', color: '#a5b4fc', display: 'flex', gap: '12px' }}>
             <ShieldCheck size={22} style={{ flexShrink: 0, marginTop: '2px' }} />

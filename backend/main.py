@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from database import get_db, init_db, generate_sha256_signature, generate_data_principal_id, generate_unpredictable_token
-from models import DecisionPayload, RevokePayload, DSRRequestPayload, ConsentRequestCreatePayload, EmailIngestPayload, GrievancePayload
+from models import DecisionPayload, RevokePayload, DSRRequestPayload, ConsentRequestCreatePayload, EmailIngestPayload, GrievancePayload, NomineePayload
 
 # Initialize database tables and seed records
 init_db()
@@ -1588,6 +1588,205 @@ def submit_grievance(payload: GrievancePayload):
         "status": "OPEN",
         "fiduciary": payload.fiduciary
     }
+
+@app.get("/api/nominee")
+def get_nominee(principalId: Optional[str] = Query(None), email: Optional[str] = Query(None)):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    row = None
+    if principalId and email:
+        cursor.execute("""
+        SELECT * FROM statutory_nominees 
+        WHERE (data_principal_id = ? OR principal_email = ?) AND status = 'ACTIVE_VERIFIED'
+        ORDER BY date_designated DESC LIMIT 1;
+        """, (principalId, email))
+        row = cursor.fetchone()
+    elif principalId:
+        cursor.execute("""
+        SELECT * FROM statutory_nominees 
+        WHERE data_principal_id = ? AND status = 'ACTIVE_VERIFIED'
+        ORDER BY date_designated DESC LIMIT 1;
+        """, (principalId,))
+        row = cursor.fetchone()
+    elif email:
+        cursor.execute("""
+        SELECT * FROM statutory_nominees 
+        WHERE principal_email = ? AND status = 'ACTIVE_VERIFIED'
+        ORDER BY date_designated DESC LIMIT 1;
+        """, (email,))
+        row = cursor.fetchone()
+
+    # Fallback to any active nominee if specific query returned nothing
+    if not row:
+        cursor.execute("SELECT * FROM statutory_nominees WHERE status = 'ACTIVE_VERIFIED' ORDER BY date_designated DESC LIMIT 1;")
+        row = cursor.fetchone()
+
+    conn.close()
+
+    if not row:
+        return {"nominee": None}
+
+    d = dict(row)
+    return {
+        "nominee": {
+            "id": d["id"],
+            "dataPrincipalId": d["data_principal_id"],
+            "principalEmail": d.get("principal_email"),
+            "nomineeName": d["nominee_name"],
+            "relationship": d["relationship"],
+            "contactPhone": d["contact_phone"],
+            "contactEmail": d["contact_email"],
+            "idType": d["id_type"],
+            "idNumber": d["id_number"],
+            "status": d["status"],
+            "dateDesignated": d["date_designated"]
+        }
+    }
+
+@app.post("/api/nominee")
+def save_nominee(payload: NomineePayload):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    nom_id = f"NOM-2026-{random.randint(1000, 9999)}"
+    now = datetime.utcnow()
+    now_str = now.isoformat() + "Z"
+    date_str = now.strftime("%Y-%m-%d")
+
+    principal_email = payload.principalEmail or "pandeyprerna1407@gmail.com"
+    dp_id = payload.dataPrincipalId or generate_data_principal_id(principal_email)
+
+    # Check if active nominee already exists for this principal
+    cursor.execute("""
+    SELECT id FROM statutory_nominees 
+    WHERE (data_principal_id = ? OR principal_email = ?) AND status = 'ACTIVE_VERIFIED';
+    """, (dp_id, principal_email))
+    existing = cursor.fetchone()
+
+    if existing:
+        cursor.execute("""
+        UPDATE statutory_nominees SET
+            nominee_name = ?,
+            relationship = ?,
+            contact_phone = ?,
+            contact_email = ?,
+            id_type = ?,
+            id_number = ?,
+            date_designated = ?,
+            updated_at = ?
+        WHERE id = ?;
+        """, (
+            payload.nomineeName,
+            payload.relationship,
+            payload.contactPhone,
+            payload.contactEmail,
+            payload.idType,
+            payload.idNumber,
+            date_str,
+            now_str,
+            existing["id"]
+        ))
+        nom_id = existing["id"]
+    else:
+        cursor.execute("""
+        INSERT INTO statutory_nominees (id, data_principal_id, principal_email, nominee_name, relationship, contact_phone, contact_email, id_type, id_number, status, date_designated, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE_VERIFIED', ?, ?);
+        """, (
+            nom_id,
+            dp_id,
+            principal_email,
+            payload.nomineeName,
+            payload.relationship,
+            payload.contactPhone,
+            payload.contactEmail,
+            payload.idType,
+            payload.idNumber,
+            date_str,
+            now_str
+        ))
+
+    # Record immutable statutory audit log
+    cursor.execute("""
+    INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+    VALUES (?, ?, 'N/A', ?, 'NOMINEE_ASSIGNED', 'DPDP Statutory Registry (Self-Nomination)', 'DPDP-SEC-14', ?, '103.21.124.88', ?, 'ACTIVE');
+    """, (
+        f"AUD-{random.randint(100, 999)}",
+        nom_id,
+        dp_id,
+        f"Data Principal designated {payload.nomineeName} ({payload.relationship}) as legal statutory nominee under DPDP Act Section 14.",
+        now_str
+    ))
+
+    # Record in DSR requests tracker
+    cursor.execute("""
+    INSERT INTO data_rights_requests (id, data_principal_id, request_type, target_fiduciary, details, status, sla_deadline, created_at)
+    VALUES (?, ?, 'NOMINEE_DESIGNATION', 'Data Principal Self-Registry', ?, 'COMPLETED', ?, ?);
+    """, (
+        f"DSR-NOM-{random.randint(1000, 9999)}",
+        dp_id,
+        json.dumps({
+            "nomineeId": nom_id,
+            "nomineeName": payload.nomineeName,
+            "relationship": payload.relationship,
+            "contactPhone": payload.contactPhone,
+            "contactEmail": payload.contactEmail,
+            "idType": payload.idType,
+            "statutoryBasis": "Digital Personal Data Protection Act 2023 - Section 14"
+        }),
+        now_str,
+        now_str
+    ))
+
+    conn.commit()
+    conn.close()
+
+    nominee_data = {
+        "id": nom_id,
+        "dataPrincipalId": dp_id,
+        "principalEmail": principal_email,
+        "nomineeName": payload.nomineeName,
+        "relationship": payload.relationship,
+        "contactPhone": payload.contactPhone,
+        "contactEmail": payload.contactEmail,
+        "idType": payload.idType,
+        "idNumber": payload.idNumber,
+        "status": "ACTIVE_VERIFIED",
+        "dateDesignated": date_str
+    }
+
+    return {
+        "success": True,
+        "message": f"Statutory nominee {payload.nomineeName} registered successfully under DPDP Act Section 14.",
+        "nominee": nominee_data
+    }
+
+@app.delete("/api/nominee")
+def remove_nominee(principalId: Optional[str] = Query(None), email: Optional[str] = Query(None)):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    now_str = datetime.utcnow().isoformat() + "Z"
+    dp_id = principalId or (generate_data_principal_id(email) if email else None)
+
+    if dp_id:
+        cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ? WHERE data_principal_id = ? OR principal_email = ?;", (now_str, dp_id, email))
+    else:
+        cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ?;", (now_str,))
+
+    # Log revocation in audit log
+    cursor.execute("""
+    INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+    VALUES (?, 'N/A', 'N/A', ?, 'NOMINEE_REVOKED', 'DPDP Statutory Registry (Self-Nomination)', 'DPDP-SEC-14', 'Data Principal revoked designated statutory nominee under DPDP Act Section 14.', '103.21.124.88', ?, 'REVOKED');
+    """, (
+        f"AUD-{random.randint(100, 999)}",
+        dp_id or "DP-2026-90011",
+        now_str
+    ))
+
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Statutory nominee designation revoked."}
 
 if __name__ == "__main__":
     print("====================================================")

@@ -24,7 +24,19 @@
 // ─── CONFIGURATION ──────────────────────────────────────────
 
 // Your current Cloudflare tunnel URL pointing to the FastAPI backend
-var BACKEND_WEBHOOK_URL = "https://substitute-contacted-consultation-kirk.trycloudflare.com/api/gmail-webhook";
+var BACKEND_WEBHOOK_URL = "https://accept-deny-speeds-penalties.trycloudflare.com/api/gmail-webhook";
+
+// Resolves webhook secret dynamically from Script Properties. Never hardcoded.
+function getWebhookSecret() {
+  var secret = PropertiesService.getScriptProperties().getProperty('GMAIL_WEBHOOK_SECRET');
+  if (!secret) {
+    throw new Error(
+      'CRITICAL CONFIGURATION ERROR: Script Property "GMAIL_WEBHOOK_SECRET" is missing. ' +
+      'Please configure GMAIL_WEBHOOK_SECRET in Project Settings -> Script Properties.'
+    );
+  }
+  return secret;
+}
 
 // How many days back to scan for emails (prevents syncing your entire inbox)
 var LOOKBACK_DAYS = 7;
@@ -156,6 +168,9 @@ function syncConsentEmails() {
         var options = {
           method:             'post',
           contentType:        'application/json',
+          headers: {
+            'X-Webhook-Secret': getWebhookSecret()
+          },
           payload:            JSON.stringify(payload),
           muteHttpExceptions: true
         };
@@ -309,10 +324,14 @@ function checkSyncStatus() {
 function dispatchPendingConsentReplies() {
   var baseUrl = BACKEND_WEBHOOK_URL.replace(/\/api\/gmail-webhook\/?$/, '');
   var pendingUrl = baseUrl + '/api/notifications/pending';
+  var webhookSecret = getWebhookSecret();
 
   try {
     var response = UrlFetchApp.fetch(pendingUrl, {
       method: 'get',
+      headers: {
+        'X-Webhook-Secret': webhookSecret
+      },
       muteHttpExceptions: true
     });
 
@@ -438,7 +457,7 @@ function dispatchPendingConsentReplies() {
           '    </div>',
           (receiptHash && receiptHash !== 'N/A' ? [
             '    <div style="background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 18px;">',
-            '      <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">SHA-256 Digital Cryptographic Signature:</div>',
+            '      <div style="font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 600; margin-bottom: 4px;">SHA-256 Integrity Hash:</div>',
             '      <div style="font-family: monospace; font-size: 11px; color: #0f766e; word-break: break-all;">' + receiptHash + '</div>',
             '    </div>'
           ].join('\n') : ''),
@@ -458,7 +477,7 @@ function dispatchPendingConsentReplies() {
           'Purpose: ' + purpose,
           (selectedAttrs.length > 0 ? 'Granted Attributes: ' + selectedAttrs.join(', ') : ''),
           (deniedAttrs.length > 0 ? 'Denied Attributes: ' + deniedAttrs.join(', ') : ''),
-          (receiptHash !== 'N/A' ? 'Digital Signature: ' + receiptHash : ''),
+          (receiptHash !== 'N/A' ? 'SHA-256 Integrity Hash: ' + receiptHash : ''),
           '==================================================='
         ].filter(Boolean).join('\n');
       }
@@ -512,6 +531,9 @@ function dispatchPendingConsentReplies() {
         // Acknowledge notification to backend so it's marked SENT
         UrlFetchApp.fetch(baseUrl + '/api/notifications/' + item.id + '/ack', {
           method: 'post',
+          headers: {
+            'X-Webhook-Secret': webhookSecret
+          },
           muteHttpExceptions: true
         });
 

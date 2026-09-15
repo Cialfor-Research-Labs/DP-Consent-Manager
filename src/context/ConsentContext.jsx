@@ -8,6 +8,7 @@ import {
 } from '../mock/initialData';
 import { INDIC_LANGUAGES, getTranslation } from '../i18n/translations';
 import { consentApi } from '../api/consentApi';
+import { useAuth } from './AuthContext';
 
 const ConsentContext = createContext();
 
@@ -90,12 +91,24 @@ export const ConsentProvider = ({ children }) => {
   // Current scenario object (source of truth for fiduciary, purpose & data principal)
   const currentScenario = scenarios.find(s => s.id === activeScenarioId || s.token === activeScenarioId || s.noticeId === activeScenarioId) || scenarios[0];
 
-  // Dynamic Data Principal derived directly from the active consent request email
-  const dataPrincipal = currentScenario?.dataPrincipal || {
+  const auth = useAuth();
+  const authUser = auth?.user;
+
+  // Dynamic Data Principal derived directly from authenticated user or active consent request
+  const dataPrincipal = (authUser && authUser.role === 'DATA_PRINCIPAL') ? {
+    id: authUser.data_principal_id || authUser.dp_id || currentScenario?.dataPrincipal?.id || "DP-2026-00000",
+    name: authUser.name || currentScenario?.dataPrincipal?.name || "Data Principal",
+    email: authUser.email || currentScenario?.dataPrincipal?.email || "principal@example.com",
+    phone: currentScenario?.dataPrincipal?.phone || "+91 98765 12345",
+    rollNo: currentScenario?.dataPrincipal?.rollNo || "CIALFOR-DP-2026",
+    institution: currentScenario?.dataPrincipal?.institution || "Cialfor Partner Institution",
+    kycStatus: currentScenario?.dataPrincipal?.kycStatus || "Verified",
+    registeredOn: authUser.created_at || currentScenario?.dataPrincipal?.registeredOn || "2026-09-01"
+  } : (currentScenario?.dataPrincipal || {
     id: "DP-2026-DYNAMIC",
     name: "Data Principal",
     email: "principal@example.com"
-  };
+  });
 
   // Language State for DPDP Act Section 5(3) Multilingual Support
   const [language, setLanguageState] = useState(() => {

@@ -252,7 +252,7 @@ export const UI_TRANSLATIONS = {
     rightToRevoke: "RIGHT TO REVOKE",
     revokeStatutoryText: "Under DPDP Act Section 6(4), you can revoke this consent anytime from your Active Consents tab.",
     inquireDpoBtn: "Inquire / Contact DPO",
-    signedArtifactNotice: "Signed Artifact: Your consent decision is cryptographically signed and recorded in the audit trail.",
+    signedArtifactNotice: "Consent Artifact: Your consent decision is verified with a SHA-256 integrity hash and recorded in the audit trail.",
     
     // Active Consents
     activeConsentsTitle: "Active Given Consents",
@@ -350,7 +350,7 @@ export const UI_TRANSLATIONS = {
     rightToRevoke: "वापस लेने का अधिकार",
     revokeStatutoryText: "DPDP अधिनियम की धारा 6(4) के तहत, आप किसी भी समय अपनी सक्रिय सहमतियां टैब से इस सहमति को वापस ले सकते हैं।",
     inquireDpoBtn: "DPO से पूछताछ / संपर्क करें",
-    signedArtifactNotice: "हस्ताक्षरित कलाकृति: आपका सहमति निर्णय क्रिप्टोग्राफिक रूप से हस्ताक्षरित और ऑडिट ट्रेल में दर्ज है।",
+    signedArtifactNotice: "सहमति विलेख: आपका सहमति निर्णय SHA-256 अखंडता हैश (Integrity Hash) द्वारा सत्यापित और ऑडिट ट्रेल में दर्ज है।",
     
     activeConsentsTitle: "सक्रिय दी गई सहमतियां",
     activeConsentsSub: "अपनी सक्रिय डेटा अनुमतियों को प्रबंधित करें। आपके पास DPDP अधिनियम 2023 की धारा 6(4) के तहत किसी भी समय सहमति वापस लेने का वैधानिक अधिकार है।",

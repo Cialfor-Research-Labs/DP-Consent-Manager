@@ -84,9 +84,9 @@ export const ConsentReceiptModal = () => {
 
           <div className="receipt-hash-box">
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
-              CRYPTOGRAPHIC DIGITAL SIGNATURE HASH (SHA-256):
+              SHA-256 INTEGRITY HASH:
             </div>
-            {latestReceipt.receiptHash}
+            {latestReceipt.receiptHash || latestReceipt.sha256IntegrityHash}
           </div>
         </div>
 

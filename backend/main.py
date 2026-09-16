@@ -1172,8 +1172,23 @@ def record_consent_decision(
 
     req = dict(req_row)
 
-    # Enforce ownership: Data Principal can only submit decisions for their own requests
-    if req["data_principal_id"] != current_user.get("dp_id"):
+    # Enforce ownership: Data Principal can only submit decisions for their own requests.
+    # Resolve the authenticated user's canonical dp_id using the same logic as registration
+    # and Gmail-webhook ingestion (link_or_create_data_principal on the normalized email).
+    # This handles cases where the users.data_principal_id column was null or stale
+    # (e.g., the user registered before email-normalization was introduced, or before
+    # sync_and_normalize_data_principals ran). The RBAC check is NOT weakened: we still
+    # require the request's dp_id to match the dp_id derived from the authenticated user's
+    # own verified email — no other user's dp_id can satisfy this check.
+    user_dp_id = current_user.get("dp_id")
+    if not user_dp_id:
+        # Fall back: re-derive dp_id from the authenticated user's normalized email,
+        # using the same canonical function used during Gmail-sync ingestion.
+        _, norm_user_email = normalize_email_address(current_user.get("email", ""))
+        if norm_user_email:
+            user_dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+
+    if req["data_principal_id"] != user_dp_id:
         conn.close()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1347,12 +1362,23 @@ def record_consent_decision(
         dp_row = cursor.fetchone()
         dp_dict = dict(dp_row) if dp_row else {}
 
+        principal_name = dp_dict.get("name")
+        if not principal_name:
+            cursor.execute("SELECT name FROM users WHERE data_principal_id = ? LIMIT 1;", (req["data_principal_id"],))
+            u_row = cursor.fetchone()
+            if u_row and u_row["name"]:
+                principal_name = u_row["name"]
+        if not principal_name:
+            principal_name = current_user.get("name") or "Data Principal"
+
+        principal_email = dp_dict.get("email") or current_user.get("email") or ""
+
         consent_record = {
             "consentId": consent_id,
             "requestId": req["id"],
             "principalId": req["data_principal_id"],
-            "principalName": dp_dict.get("name") or "Prerna Pandey",
-            "principalEmail": dp_dict.get("email") or "",
+            "principalName": principal_name,
+            "principalEmail": principal_email,
             "fiduciary": req["fiduciary_name"],
             "fiduciaryCategory": req["fiduciary_category"],
             "fiduciaryLogo": req["fiduciary_logo"],
@@ -1362,8 +1388,8 @@ def record_consent_decision(
             "status": "ACTIVE",
             "grantedOn": now,
             "expiresOn": expiry,
-            "grantedAttributes": payload.selected_attributes,
-            "deniedAttributes": payload.denied_attributes,
+            "grantedAttributes": readable_granted,
+            "deniedAttributes": readable_denied,
             "dpoContact": req["dpo_email"],
             "dataRegion": req["data_region"],
             "receiptHash": receipt_hash,
@@ -1411,7 +1437,7 @@ def record_consent_decision(
             match = re.search(r'<([^>]+)>', raw_from)
             actual_sender = match.group(1).strip() if match else (raw_from.strip() if "@" in raw_from else None)
 
-    recipient_email = actual_sender or req.get("fiduciary_email") or "compliance@fiduciary.com"
+    recipient_email = actual_sender or req.get("fiduciary_email") or req.get("dpo_email") or "compliance@fiduciary.com"
 
     notif_id = f"NOTIF-2026-{random.randint(1000, 9999)}"
     notif_details = {
@@ -1419,14 +1445,14 @@ def record_consent_decision(
         "token": req.get("token"),
         "requestId": req["id"],
         "fiduciaryName": req["fiduciary_name"],
-        "principalName": consent_record.get("principalName", "Data Principal") if consent_record else "Data Principal",
-        "principalEmail": consent_record.get("principalEmail", "") if consent_record else "",
+        "principalName": consent_record.get("principalName", principal_name) if consent_record else (current_user.get("name") or "Data Principal"),
+        "principalEmail": consent_record.get("principalEmail", principal_email) if consent_record else (current_user.get("email") or ""),
         "recipientEmail": recipient_email,
         "originalSubject": original_subject,
         "noticeId": req["notice_id"],
         "purpose": req["purpose"],
-        "selectedAttributes": payload.selected_attributes,
-        "deniedAttributes": payload.denied_attributes,
+        "selectedAttributes": readable_granted if payload.decision == "GRANTED" else [],
+        "deniedAttributes": readable_denied,
         "remark": payload.remark,
         "artifact": consent_record if consent_record else {
             "decision": payload.decision,

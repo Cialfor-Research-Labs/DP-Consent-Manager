@@ -30,8 +30,15 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
     setUser(null);
     setAuthError(null);
+    // Auth credentials
     localStorage.removeItem('dp_auth_token');
     localStorage.removeItem('dp_auth_user');
+    // Session-specific consent data — must be cleared on logout so the
+    // next user does not inherit stale data from the previous session.
+    localStorage.removeItem('dp_active_consents');
+    localStorage.removeItem('dp_audit_logs');
+    localStorage.removeItem('dp_dsr_requests');
+    localStorage.removeItem('dp_nominee');
   }, []);
 
   // Validate existing session on application boot

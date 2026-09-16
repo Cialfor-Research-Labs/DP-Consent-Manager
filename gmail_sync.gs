@@ -24,7 +24,7 @@
 // ─── CONFIGURATION ──────────────────────────────────────────
 
 // Your current Cloudflare tunnel URL pointing to the FastAPI backend
-var BACKEND_WEBHOOK_URL = "https://accept-deny-speeds-penalties.trycloudflare.com/api/gmail-webhook";
+var BACKEND_WEBHOOK_URL = "https://lanka-midlands-parties-first.trycloudflare.com/api/gmail-webhook";
 
 // Resolves webhook secret dynamically from Script Properties. Never hardcoded.
 function getWebhookSecret() {
@@ -360,7 +360,7 @@ function dispatchPendingConsentReplies() {
       var purpose = details.purpose || 'Data Processing';
       var token = item.token || details.token || '';
       var originalSubject = item.original_subject || details.originalSubject || item.subject || '';
-      var recipientEmail = item.recipient_email || details.recipientEmail || 'pandeyprerna1407@gmail.com';
+      var recipientEmail = item.recipient_email || details.recipientEmail || (details.artifact ? details.artifact.dpoContact : null) || '';
       var selectedAttrs = details.selectedAttributes || (details.artifact ? details.artifact.grantedAttributes : []) || [];
       var deniedAttrs = details.deniedAttributes || (details.artifact ? details.artifact.deniedAttributes : []) || [];
       var receiptHash = (details.artifact && details.artifact.receiptHash) ? details.artifact.receiptHash : 'N/A';
@@ -519,13 +519,15 @@ function dispatchPendingConsentReplies() {
             name: 'DPDP Privacy Portal'
           });
           Logger.log('[NOTIF-REPLIED] Replied on thread ' + thread.getId() + ' for notice ' + noticeId + ' (' + action + ')');
-        } else {
+        } else if (recipientEmail && recipientEmail.indexOf('@') > -1) {
           // Send direct email if original thread not located
           GmailApp.sendEmail(recipientEmail, replySubject, plainText, {
             htmlBody: htmlBody,
             name: 'DPDP Privacy Portal'
           });
           Logger.log('[NOTIF-SENT] Dispatched direct email to ' + recipientEmail + ' for notice ' + noticeId);
+        } else {
+          Logger.log('[WARN] No valid recipient email or thread found for notification ' + item.id + ' (notice: ' + noticeId + ')');
         }
 
         // Acknowledge notification to backend so it's marked SENT

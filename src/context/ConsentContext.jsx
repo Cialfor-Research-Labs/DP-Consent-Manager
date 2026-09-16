@@ -3,11 +3,11 @@ import {
   MOCK_SCENARIOS, 
   INITIAL_ACTIVE_CONSENTS, 
   INITIAL_AUDIT_LOGS,
-  INITIAL_NOMINEE,
   INITIAL_DSR_REQUESTS
 } from '../mock/initialData';
 import { INDIC_LANGUAGES, getTranslation } from '../i18n/translations';
 import { consentApi } from '../api/consentApi';
+import { useAuth } from './AuthContext';
 
 const ConsentContext = createContext();
 
@@ -90,12 +90,24 @@ export const ConsentProvider = ({ children }) => {
   // Current scenario object (source of truth for fiduciary, purpose & data principal)
   const currentScenario = scenarios.find(s => s.id === activeScenarioId || s.token === activeScenarioId || s.noticeId === activeScenarioId) || scenarios[0];
 
-  // Dynamic Data Principal derived directly from the active consent request email
-  const dataPrincipal = currentScenario?.dataPrincipal || {
+  const auth = useAuth();
+  const authUser = auth?.user;
+
+  // Dynamic Data Principal derived directly from authenticated user or active consent request
+  const dataPrincipal = (authUser && authUser.role === 'DATA_PRINCIPAL') ? {
+    id: authUser.data_principal_id || authUser.dp_id || currentScenario?.dataPrincipal?.id || "DP-2026-00000",
+    name: authUser.name || currentScenario?.dataPrincipal?.name || "Data Principal",
+    email: authUser.email || currentScenario?.dataPrincipal?.email || "principal@example.com",
+    phone: currentScenario?.dataPrincipal?.phone || "+91 98765 12345",
+    rollNo: currentScenario?.dataPrincipal?.rollNo || "CIALFOR-DP-2026",
+    institution: currentScenario?.dataPrincipal?.institution || "Cialfor Partner Institution",
+    kycStatus: currentScenario?.dataPrincipal?.kycStatus || "Verified",
+    registeredOn: authUser.created_at || currentScenario?.dataPrincipal?.registeredOn || "2026-09-01"
+  } : (currentScenario?.dataPrincipal || {
     id: "DP-2026-DYNAMIC",
     name: "Data Principal",
     email: "principal@example.com"
-  };
+  });
 
   // Language State for DPDP Act Section 5(3) Multilingual Support
   const [language, setLanguageState] = useState(() => {
@@ -137,37 +149,21 @@ export const ConsentProvider = ({ children }) => {
   const [selectedAttributes, setSelectedAttributes] = useState({});
 
   // Active given consents list
-  const [activeConsents, setActiveConsents] = useState(() => {
-    const saved = localStorage.getItem('dp_active_consents');
-    return saved ? JSON.parse(saved) : INITIAL_ACTIVE_CONSENTS;
-  });
+  // NOTE: Do NOT seed from localStorage here — stale data from a previous
+  // session would be shown to the newly-logged-in user before the backend
+  // fetch completes. The backend fetch is always the authoritative source;
+  // localStorage is written after fetch for persistence across page refreshes
+  // within the same session, not across separate login sessions.
+  const [activeConsents, setActiveConsents] = useState(INITIAL_ACTIVE_CONSENTS);
 
   // Audit logs list
-  const [auditLogs, setAuditLogs] = useState(() => {
-    const saved = localStorage.getItem('dp_audit_logs');
-    return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
-  });
+  const [auditLogs, setAuditLogs] = useState(INITIAL_AUDIT_LOGS);
 
   // Nominee state (Section 14)
-  const [nominee, setNomineeState] = useState(() => {
-    const saved = localStorage.getItem('dp_nominee');
-    if (!saved) return null;
-    try {
-      const parsed = JSON.parse(saved);
-      if (parsed?.nomineeName === "Rajesh Sharma" && parsed?.dateDesignated === "2025-08-20") {
-        return null;
-      }
-      return parsed;
-    } catch {
-      return null;
-    }
-  });
+  const [nominee, setNomineeState] = useState(null);
 
   // DSR Requests List (Sections 11-14)
-  const [dsrRequests, setDsrRequests] = useState(() => {
-    const saved = localStorage.getItem('dp_dsr_requests');
-    return saved ? JSON.parse(saved) : INITIAL_DSR_REQUESTS;
-  });
+  const [dsrRequests, setDsrRequests] = useState(INITIAL_DSR_REQUESTS);
 
   const [nominationModalOpen, setNominationModalOpen] = useState(false);
   const [latestReceipt, setLatestReceipt] = useState(null);
@@ -175,7 +171,9 @@ export const ConsentProvider = ({ children }) => {
   const [grievanceTarget, setGrievanceTarget] = useState(null);
   const [toastMessage, setToastMessage] = useState(null);
 
-  // Function to refetch live data from Python FastAPI backend
+  // Function to refetch live data from Python FastAPI backend.
+  // Only runs when a user is authenticated — guarded by authUser check
+  // at the call site to prevent unauthenticated API calls on boot.
   const refetchBackendData = useCallback(async () => {
     try {
       setApiError(null);
@@ -237,10 +235,26 @@ export const ConsentProvider = ({ children }) => {
     }
   }, [dataPrincipal.id, dataPrincipal.email]);
 
-  // Initial sync with backend API
+  // Sync backend data whenever the authenticated user changes (login / session
+  // restore / logout). On logout authUser becomes null so we reset local state
+  // to clean defaults instead of fetching.
+  const authUserId = authUser?.id || null;
   useEffect(() => {
-    refetchBackendData();
-  }, [refetchBackendData]);
+    if (authUserId) {
+      // A real user is authenticated — fetch their data from the backend.
+      refetchBackendData();
+    } else {
+      // No user — reset all session-specific state to clean defaults so
+      // the login screen and any subsequent login start completely fresh.
+      setActiveConsents(INITIAL_ACTIVE_CONSENTS);
+      setAuditLogs(INITIAL_AUDIT_LOGS);
+      setDsrRequests(INITIAL_DSR_REQUESTS);
+      setNomineeState(null);
+      setScenarios(MOCK_SCENARIOS);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUserId]);
+
 
   // Async token resolution effect from backend Python REST API
   useEffect(() => {

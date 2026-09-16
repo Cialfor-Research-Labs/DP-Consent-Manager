@@ -1,19 +1,99 @@
 /**
  * Data Principal Consent Manager - REST API Integration Layer
- * Serves as the interface to the Python FastAPI backend services for consent requests,
- * decision persistence, cryptographic receipt generation, statutory revocations, audit logs, and DSR portal.
+ * Serves as the interface to the Python FastAPI backend services for authentication,
+ * consent requests, decision persistence, cryptographic receipt generation,
+ * statutory revocations, audit logs, and DSR portal.
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
+/**
+ * Retrieve authorization headers using the JWT stored in localStorage
+ */
+export const getAuthHeaders = () => {
+  const token = localStorage.getItem('dp_auth_token');
+  return token ? { 'Authorization': `Bearer ${token}` } : {};
+};
+
+/**
+ * Authenticated fetch helper that injects Bearer token and handles 401 Session Expiry
+ */
+export const authFetch = async (url, options = {}) => {
+  const headers = {
+    ...options.headers,
+    ...getAuthHeaders()
+  };
+
+  const response = await fetch(url, { ...options, headers });
+
+  if (response.status === 401) {
+    // Only dispatch event if a token was actually present
+    if (localStorage.getItem('dp_auth_token')) {
+      window.dispatchEvent(new CustomEvent('dp-auth:expired'));
+    }
+  }
+
+  return response;
+};
+
 export const consentApi = {
+  // ── AUTHENTICATION ENDPOINTS ──────────────────────────────────────────
+
+  /**
+   * Register a new user account
+   * POST /api/auth/register
+   */
+  async register(payload) {
+    const response = await fetch(`${API_BASE_URL}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Registration failed.');
+    }
+    return data;
+  },
+
+  /**
+   * Authenticate user with email and password
+   * POST /api/auth/login
+   */
+  async login(credentials) {
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Invalid email or password.');
+    }
+    return data;
+  },
+
+  /**
+   * Fetch currently authenticated user profile
+   * GET /api/auth/me
+   */
+  async getMe() {
+    const response = await authFetch(`${API_BASE_URL}/auth/me`);
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  },
+
+  // ── CONSENT & INTEGRATION ENDPOINTS ───────────────────────────────────
+
   /**
    * Ingest any custom email subject & body text into backend database
    * POST /api/ingest-email
    */
   async ingestEmail(payload) {
     try {
-      const response = await fetch(`${API_BASE_URL}/ingest-email`, {
+      const response = await authFetch(`${API_BASE_URL}/ingest-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -28,12 +108,12 @@ export const consentApi = {
   },
 
   /**
-   * Fetch all consent requests from backend
+   * Fetch all consent requests from backend (filtered by backend role & ownership)
    * GET /api/consent-requests
    */
   async fetchConsentRequests() {
     try {
-      const response = await fetch(`${API_BASE_URL}/consent-requests`);
+      const response = await authFetch(`${API_BASE_URL}/consent-requests`);
       if (response.ok) {
         return await response.json();
       }
@@ -49,7 +129,7 @@ export const consentApi = {
    */
   async resolveConsentRequest(token) {
     try {
-      const response = await fetch(`${API_BASE_URL}/consent-requests/resolve?token=${encodeURIComponent(token)}`);
+      const response = await authFetch(`${API_BASE_URL}/consent-requests/resolve?token=${encodeURIComponent(token)}`);
       if (response.ok) {
         return await response.json();
       }
@@ -67,7 +147,7 @@ export const consentApi = {
     try {
       const qs = new URLSearchParams(queryParams).toString();
       const url = `${API_BASE_URL}/consent-requests/${encodeURIComponent(requestToken)}${qs ? '?' + qs : ''}`;
-      const response = await fetch(url);
+      const response = await authFetch(url);
       if (response.ok) {
         return await response.json();
       }
@@ -83,34 +163,50 @@ export const consentApi = {
    */
   async submitConsentDecision(requestId, decisionData) {
     try {
-      const response = await fetch(`${API_BASE_URL}/consent-requests/${encodeURIComponent(requestId)}/decision`, {
+      const response = await authFetch(`${API_BASE_URL}/consent-requests/${encodeURIComponent(requestId)}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(decisionData)
       });
       if (response.ok) {
         return await response.json();
+      } else {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Submission failed with status ${response.status}`);
       }
     } catch (e) {
       console.warn('Backend API submission offline, persisting decision locally:', e.message);
+      throw e;
     }
-    return { 
-      success: true, 
-      status: decisionData.decision, 
-      persistedAt: new Date().toISOString() 
-    };
+  },
+
+  /**
+   * Create a new consent request notice (Data Fiduciary / Admin only)
+   * POST /api/consent-requests
+   */
+  async createConsentRequest(payload) {
+    const response = await authFetch(`${API_BASE_URL}/consent-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to create consent request notice.');
+    }
+    return data;
   },
 
   /**
    * Fetch active consents from backend
-   * GET /api/consents?principalId={principalId}
+   * GET /api/consents
    */
   async fetchActiveConsents(principalId) {
     try {
       const url = principalId 
         ? `${API_BASE_URL}/consents?principalId=${encodeURIComponent(principalId)}`
         : `${API_BASE_URL}/consents`;
-      const response = await fetch(url);
+      const response = await authFetch(url);
       if (response.ok) {
         return await response.json();
       }
@@ -126,7 +222,7 @@ export const consentApi = {
    */
   async fetchConsentReceipt(consentId) {
     try {
-      const response = await fetch(`${API_BASE_URL}/consents/${encodeURIComponent(consentId)}/receipt`);
+      const response = await authFetch(`${API_BASE_URL}/consents/${encodeURIComponent(consentId)}/receipt`);
       if (response.ok) {
         return await response.json();
       }
@@ -142,30 +238,33 @@ export const consentApi = {
    */
   async revokeConsent(consentId, revocationData) {
     try {
-      const response = await fetch(`${API_BASE_URL}/consents/${encodeURIComponent(consentId)}/revoke`, {
+      const response = await authFetch(`${API_BASE_URL}/consents/${encodeURIComponent(consentId)}/revoke`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(revocationData)
       });
       if (response.ok) {
         return await response.json();
+      } else {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.detail || 'Revocation failed.');
       }
     } catch (e) {
-      console.warn('Backend API revocation offline, applying local revocation:', e.message);
+      console.warn('Backend API revocation error:', e.message);
+      throw e;
     }
-    return { success: true, status: 'REVOKED' };
   },
 
   /**
    * Fetch audit logs from backend
-   * GET /api/audit-logs?principalId={principalId}
+   * GET /api/audit-logs
    */
   async fetchAuditLogs(principalId) {
     try {
       const url = principalId 
         ? `${API_BASE_URL}/audit-logs?principalId=${encodeURIComponent(principalId)}`
         : `${API_BASE_URL}/audit-logs`;
-      const response = await fetch(url);
+      const response = await authFetch(url);
       if (response.ok) {
         return await response.json();
       }
@@ -181,7 +280,7 @@ export const consentApi = {
    */
   async submitDataRightsRequest(dsrData) {
     try {
-      const response = await fetch(`${API_BASE_URL}/data-rights`, {
+      const response = await authFetch(`${API_BASE_URL}/data-rights`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(dsrData)
@@ -197,14 +296,14 @@ export const consentApi = {
 
   /**
    * Fetch Data Rights Requests from backend
-   * GET /api/data-rights?principalId={principalId}
+   * GET /api/data-rights
    */
   async fetchDataRightsRequests(principalId) {
     try {
       const url = principalId
         ? `${API_BASE_URL}/data-rights?principalId=${encodeURIComponent(principalId)}`
         : `${API_BASE_URL}/data-rights`;
-      const response = await fetch(url);
+      const response = await authFetch(url);
       if (response.ok) {
         return await response.json();
       }
@@ -220,7 +319,7 @@ export const consentApi = {
    */
   async submitGrievance(grievanceData) {
     try {
-      const response = await fetch(`${API_BASE_URL}/grievance`, {
+      const response = await authFetch(`${API_BASE_URL}/grievance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(grievanceData)
@@ -240,14 +339,14 @@ export const consentApi = {
 
   /**
    * Fetch active Nominee for Data Principal
-   * GET /api/nominee?principalId={id}&email={email}
+   * GET /api/nominee
    */
   async fetchNominee(principalId, email) {
     try {
       const params = new URLSearchParams();
       if (principalId) params.append('principalId', principalId);
       if (email) params.append('email', email);
-      const res = await fetch(`${API_BASE_URL}/nominee?${params.toString()}`);
+      const res = await authFetch(`${API_BASE_URL}/nominee?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         return data.nominee;
@@ -264,7 +363,7 @@ export const consentApi = {
    */
   async saveNominee(nomineeData) {
     try {
-      const res = await fetch(`${API_BASE_URL}/nominee`, {
+      const res = await authFetch(`${API_BASE_URL}/nominee`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(nomineeData)
@@ -295,7 +394,7 @@ export const consentApi = {
       const params = new URLSearchParams();
       if (principalId) params.append('principalId', principalId);
       if (email) params.append('email', email);
-      const res = await fetch(`${API_BASE_URL}/nominee?${params.toString()}`, {
+      const res = await authFetch(`${API_BASE_URL}/nominee?${params.toString()}`, {
         method: 'DELETE'
       });
       if (res.ok) {

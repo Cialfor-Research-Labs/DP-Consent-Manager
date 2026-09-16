@@ -1,13 +1,50 @@
+import os
 import re
 import json
+import hmac
 import random
 import uvicorn
 from typing import Optional
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Query, Path
+from dotenv import load_dotenv
+load_dotenv()
+from fastapi import FastAPI, HTTPException, Query, Path, Depends, Header, status
 from fastapi.middleware.cors import CORSMiddleware
-from database import get_db, init_db, generate_sha256_signature, generate_data_principal_id, generate_unpredictable_token
-from models import DecisionPayload, RevokePayload, DSRRequestPayload, ConsentRequestCreatePayload, EmailIngestPayload, GrievancePayload, NomineePayload
+from database import (
+    get_db, 
+    init_db, 
+    generate_sha256_signature, 
+    generate_data_principal_id, 
+    generate_unpredictable_token,
+    get_user_by_email,
+    get_user_by_id,
+    create_user_account,
+    link_or_create_data_principal,
+    normalize_email_address
+)
+from auth import (
+    hash_password,
+    verify_password,
+    validate_password_strength,
+    create_access_token,
+    get_current_user,
+    get_optional_user,
+    require_role
+)
+from models import (
+    DecisionPayload, 
+    RevokePayload, 
+    DSRRequestPayload, 
+    ConsentRequestCreatePayload, 
+    EmailIngestPayload, 
+    GrievancePayload, 
+    NomineePayload,
+    UserRegisterPayload,
+    AdminUserProvisionPayload,
+    UserLoginPayload,
+    AuthResponse,
+    UserOut
+)
 
 # Initialize database tables and seed records
 init_db()
@@ -18,10 +55,25 @@ app = FastAPI(
     version="1.5.0"
 )
 
-# Enable CORS for frontend integration
+# CORS configuration supporting frontend integration with credentials
+cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000"
+]
+env_origins = os.getenv("ALLOWED_ORIGINS", "")
+if env_origins:
+    for o in env_origins.split(","):
+        clean_o = o.strip()
+        if clean_o and clean_o not in cors_origins:
+            cors_origins.append(clean_o)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:[0-9]+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -397,17 +449,10 @@ def dynamic_create_request_for_token(
     message_id: str = None
 ):
     cursor = conn.cursor()
-    dp_name = to_name or "Prerna Pandey"
-    dp_email = to_email or "pandeyprerna1407@gmail.com"
-    dp_id = generate_data_principal_id(dp_email)
-
-    # 1. Create/Ensure DataPrincipal
-    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-    if not cursor.fetchone():
-        cursor.execute("""
-        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (dp_id, dp_name, dp_email, "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", datetime.utcnow().isoformat() + "Z"))
+    parsed_name, norm_email = normalize_email_address(to_email or "pandeyprerna1407@gmail.com")
+    dp_name = to_name or parsed_name or "Data Principal"
+    dp_email = norm_email
+    dp_id = link_or_create_data_principal(dp_email, dp_name)
 
     # ── UNIVERSAL EMAIL CONTENT ANALYSIS ─────────────────────────────────────
     # Domain, purpose, and attributes are extracted from the ACTUAL email
@@ -498,24 +543,244 @@ def health_check():
     return {
         "status": "HEALTHY",
         "service": "Python FastAPI DP Consent Manager Backend (Real Email Integration)",
-        "security_features": ["cryptographic_tokens", "server_timestamps", "expiry_handling", "duplicate_prevention", "attribute_validation"],
+        "security_features": ["cryptographic_tokens", "server_timestamps", "expiry_handling", "duplicate_prevention", "attribute_validation", "jwt_auth", "rbac"],
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
+
+# ── AUTHENTICATION & RBAC ENDPOINTS ──────────────────────────────────────────
+
+EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+
+@app.post("/api/auth/register", response_model=AuthResponse)
+def register_user(payload: UserRegisterPayload):
+    # 1. Required fields check
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Full name is required.")
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email address is required.")
+    if not payload.password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+
+    # 2. Email format validation
+    normalized_email = payload.email.strip().lower()
+    if not re.match(EMAIL_REGEX, normalized_email):
+        raise HTTPException(status_code=422, detail="Invalid email address format.")
+
+    # 3. Duplicate email check
+    existing = get_user_by_email(normalized_email)
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email address already exists.")
+
+    # 4. Password strength validation
+    valid_pwd, pwd_error = validate_password_strength(payload.password)
+    if not valid_pwd:
+        raise HTTPException(status_code=422, detail=pwd_error)
+
+    # 5. Strict Role Enforcement: Public self-registration is strictly restricted to DATA_PRINCIPAL
+    role_input = (payload.role or "DATA_PRINCIPAL").strip().upper()
+    if role_input not in ["DATA_PRINCIPAL", "PRINCIPAL", "CITIZEN", ""]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public self-registration is strictly restricted to Data Principals. Data Fiduciary / Admin accounts cannot be self-registered and must be provisioned by a system administrator."
+        )
+
+    role = "DATA_PRINCIPAL"
+    dp_id = link_or_create_data_principal(normalized_email, payload.name.strip())
+    fiduciary_name = None
+
+    # 6. Secure password hashing with bcrypt
+    pw_hash = hash_password(payload.password)
+
+    # 7. Create user account
+    user_row = create_user_account(
+        name=payload.name.strip(),
+        email=normalized_email,
+        password_hash=pw_hash,
+        role=role,
+        data_principal_id=dp_id,
+        fiduciary_name=fiduciary_name
+    )
+
+    # 8. Issue JWT
+    token = create_access_token({
+        "sub": user_row["id"],
+        "email": user_row["email"],
+        "role": user_row["role"],
+        "dp_id": user_row.get("data_principal_id"),
+        "name": user_row["name"]
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_row
+    }
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+def login_user(payload: UserLoginPayload):
+    if not payload.email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+
+    normalized_email = payload.email.strip().lower()
+    user = get_user_by_email(normalized_email)
+    if not user or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    token = create_access_token({
+        "sub": user["id"],
+        "email": user["email"],
+        "role": user["role"],
+        "dp_id": user.get("data_principal_id"),
+        "name": user["name"]
+    })
+
+    user_clean = {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "role": user["role"],
+        "data_principal_id": user.get("data_principal_id"),
+        "fiduciary_name": user.get("fiduciary_name"),
+        "created_at": user.get("created_at")
+    }
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_clean
+    }
+
+
+@app.get("/api/auth/me")
+def get_current_user_profile(current_user: dict = Depends(get_current_user)):
+    return {
+        "user": {
+            "id": current_user["id"],
+            "name": current_user["name"],
+            "email": current_user["email"],
+            "role": current_user["role"],
+            "data_principal_id": current_user.get("data_principal_id"),
+            "fiduciary_name": current_user.get("fiduciary_name"),
+            "created_at": current_user.get("created_at")
+        }
+    }
+
+
+@app.post("/api/admin/users/provision", response_model=AuthResponse)
+def provision_fiduciary_user(
+    payload: AdminUserProvisionPayload,
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
+    """
+    Controlled administrative endpoint to provision Data Fiduciary or Admin accounts.
+    Accessible only by authenticated administrators / data fiduciaries.
+    """
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Full name is required.")
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email address is required.")
+    if not payload.password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+
+    normalized_email = payload.email.strip().lower()
+    if not re.match(EMAIL_REGEX, normalized_email):
+        raise HTTPException(status_code=422, detail="Invalid email address format.")
+
+    existing = get_user_by_email(normalized_email)
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email address already exists.")
+
+    valid_pwd, pwd_error = validate_password_strength(payload.password)
+    if not valid_pwd:
+        raise HTTPException(status_code=422, detail=pwd_error)
+
+    role_input = payload.role.strip().upper()
+    if role_input not in ["DATA_FIDUCIARY", "ADMIN", "DATA_PRINCIPAL"]:
+        raise HTTPException(status_code=422, detail="Invalid role specified. Must be DATA_FIDUCIARY or ADMIN.")
+
+    dp_id = None
+    fiduciary_name = None
+    if role_input == "DATA_PRINCIPAL":
+        dp_id = link_or_create_data_principal(normalized_email, payload.name.strip())
+    else:
+        fiduciary_name = payload.fiduciary_name.strip() if payload.fiduciary_name else (current_user.get("fiduciary_name") or "Cialfor Research Labs Private Limited")
+
+    pw_hash = hash_password(payload.password)
+    user_row = create_user_account(
+        name=payload.name.strip(),
+        email=normalized_email,
+        password_hash=pw_hash,
+        role=role_input,
+        data_principal_id=dp_id,
+        fiduciary_name=fiduciary_name
+    )
+
+    token = create_access_token({
+        "sub": user_row["id"],
+        "email": user_row["email"],
+        "role": user_row["role"],
+        "dp_id": user_row.get("data_principal_id"),
+        "name": user_row["name"]
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_row
+    }
+
+
+# ── GMAIL SYNC & INGESTION (SERVER-TO-SERVER AUTHENTICATION) ──────────────────
+
+def verify_webhook_secret(
+    x_webhook_secret: Optional[str] = Header(None, alias="X-Webhook-Secret"),
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> bool:
+    """
+    Authenticate server-to-server webhook requests from Google Apps Script.
+    Requires GMAIL_WEBHOOK_SECRET from the environment.
+    Fails securely if GMAIL_WEBHOOK_SECRET is not configured.
+    """
+    expected_secret = os.getenv("GMAIL_WEBHOOK_SECRET")
+    if not expected_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server configuration error: GMAIL_WEBHOOK_SECRET environment variable is not configured."
+        )
+
+    provided_secret = None
+    if x_webhook_secret:
+        provided_secret = x_webhook_secret.strip()
+    elif authorization and authorization.startswith("Bearer "):
+        provided_secret = authorization.split("Bearer ", 1)[1].strip()
+
+    if not provided_secret or not hmac.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Missing or invalid server-to-server webhook secret."
+        )
+    return True
+
 
 @app.post("/api/gmail-webhook")
 @app.post("/api/sync-gmail")
 @app.post("/api/ingest-email")
-def sync_gmail_webhook(payload: EmailIngestPayload):
+def sync_gmail_webhook(
+    payload: EmailIngestPayload,
+    _authorized: bool = Depends(verify_webhook_secret)
+):
     conn = get_db()
     cursor = conn.cursor()
 
-    to_parts = payload.to_address.split("<")
-    if len(to_parts) > 1:
-        dp_name = to_parts[0].strip()
-        dp_email = to_parts[1].replace(">", "").strip()
-    else:
-        dp_email = payload.to_address.strip()
-        dp_name = dp_email.split("@")[0].replace(".", " ").title()
+    parsed_name, norm_email = normalize_email_address(payload.to_address)
+    dp_name = parsed_name or "Data Principal"
+    dp_email = norm_email
+    dp_id = link_or_create_data_principal(dp_email, dp_name)
 
     # Prefer extracted_token from webhook payload, then look in body text, or generate new
     token = payload.extracted_token
@@ -533,14 +798,6 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
     fiduciary_name = resolve_fiduciary_name(token, new_domain, payload.subject, payload.body_text, payload.fiduciary_name or "")
     fiduciary_category, fiduciary_logo = get_fiduciary_metadata(fiduciary_name, new_domain)
     sent_date_str = payload.sent_date or datetime.utcnow().strftime("%A, %B %d, %Y")
-
-    dp_id = generate_data_principal_id(dp_email)
-    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-    if not cursor.fetchone():
-        cursor.execute("""
-        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (dp_id, dp_name, dp_email, "+91 98765 12345", "CIALFOR-DP-2026", fiduciary_name, "Verified", datetime.utcnow().isoformat() + "Z"))
 
     if row:
         req = dict(row)
@@ -582,17 +839,14 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
 
 
 @app.post("/api/consent-requests")
-def create_consent_request(payload: ConsentRequestCreatePayload):
+def create_consent_request(payload: ConsentRequestCreatePayload, current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))):
     conn = get_db()
     cursor = conn.cursor()
 
-    dp_id = generate_data_principal_id(payload.principal_email)
-    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-    if not cursor.fetchone():
-        cursor.execute("""
-        INSERT INTO data_principals (id, name, email, registered_on)
-        VALUES (?, ?, ?, ?);
-        """, (dp_id, payload.principal_name, payload.principal_email, datetime.utcnow().isoformat() + "Z"))
+    parsed_name, norm_email = normalize_email_address(payload.principal_email)
+    dp_name = payload.principal_name or parsed_name or "Data Principal"
+    dp_email = norm_email
+    dp_id = link_or_create_data_principal(dp_email, dp_name)
 
     snapshot_id = f"ES-2026-{random.randint(1000, 9999)}"
     cursor.execute("""
@@ -601,7 +855,7 @@ def create_consent_request(payload: ConsentRequestCreatePayload):
     """, (
         snapshot_id,
         f"{payload.fiduciary_name} <{payload.fiduciary_email}>",
-        f"{payload.principal_name} <{payload.principal_email}>",
+        f"{dp_name} <{dp_email}>",
         payload.email_subject,
         datetime.utcnow().strftime("%A, %B %d, %Y"),
         payload.email_body,
@@ -675,19 +929,15 @@ def resolve_consent_request(
         params_es = []
 
         if to_email:
-            dp_id = generate_data_principal_id(to_email)
-            dp_name = to_name or "Prerna Pandey"
-            cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                """, (dp_id, dp_name, to_email, "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", datetime.utcnow().isoformat() + "Z"))
-            updates_cr.append("data_principal_id = ?")
-            params_cr.append(dp_id)
-            updates_es.append("to_address = ?")
-            params_es.append(f"{dp_name} <{to_email}>")
-            need_update = True
+            parsed_name, norm_email = normalize_email_address(to_email)
+            if norm_email:
+                dp_name = to_name or parsed_name or "Data Principal"
+                dp_id = link_or_create_data_principal(norm_email, dp_name)
+                updates_cr.append("data_principal_id = ?")
+                params_cr.append(dp_id)
+                updates_es.append("to_address = ?")
+                params_es.append(f"{dp_name} <{norm_email}>")
+                need_update = True
 
         if subject:
             updates_es.append("subject = ?")
@@ -767,10 +1017,18 @@ def get_consent_request_by_notice(notice_id: str = Path(...)):
     return result
 
 @app.get("/api/consent-requests")
-def list_consent_requests():
+def list_consent_requests(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM consent_requests;")
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        cursor.execute("SELECT * FROM consent_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
+    else:
+        fiduciary_name = current_user.get("fiduciary_name")
+        if fiduciary_name:
+            cursor.execute("SELECT * FROM consent_requests WHERE fiduciary_name = ? ORDER BY created_at DESC;", (fiduciary_name,))
+        else:
+            cursor.execute("SELECT * FROM consent_requests ORDER BY created_at DESC;")
     rows = cursor.fetchall()
     results = [hydrate_request(r, conn) for r in rows]
     conn.close()
@@ -801,12 +1059,9 @@ def get_consent_request_by_token_path(
             body = es_dict.get("body_text")
             to_addr = es_dict.get("to_address", "")
             from_addr = es_dict.get("from_address", "")
-            to_parts = to_addr.split("<")
-            if len(to_parts) > 1:
-                to_name = to_name or to_parts[0].strip()
-                to_email = to_email or to_parts[1].replace(">", "").strip()
-            else:
-                to_email = to_email or to_addr.strip()
+            parsed_n, norm_e = normalize_email_address(to_addr)
+            to_name = to_name or parsed_n
+            to_email = to_email or norm_e
             if from_addr and not fiduciary:
                 from_name = from_addr.split("<")[0].strip()
                 fiduciary = from_name if from_name else fiduciary
@@ -830,19 +1085,15 @@ def get_consent_request_by_token_path(
         params_es = []
 
         if to_email:
-            dp_id = generate_data_principal_id(to_email)
-            dp_name = to_name or "Prerna Pandey"
-            cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                """, (dp_id, dp_name, to_email, "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", datetime.utcnow().isoformat() + "Z"))
-            updates_cr.append("data_principal_id = ?")
-            params_cr.append(dp_id)
-            updates_es.append("to_address = ?")
-            params_es.append(f"{dp_name} <{to_email}>")
-            need_update = True
+            parsed_name, norm_email = normalize_email_address(to_email)
+            if norm_email:
+                dp_name = to_name or parsed_name or "Data Principal"
+                dp_id = link_or_create_data_principal(norm_email, dp_name)
+                updates_cr.append("data_principal_id = ?")
+                params_cr.append(dp_id)
+                updates_es.append("to_address = ?")
+                params_es.append(f"{dp_name} <{norm_email}>")
+                need_update = True
 
         if subject:
             updates_es.append("subject = ?")
@@ -902,7 +1153,11 @@ def get_consent_request_by_token_path(
     return result
 
 @app.post("/api/consent-requests/{request_id}/decision")
-def record_consent_decision(request_id: str, payload: DecisionPayload):
+def record_consent_decision(
+    request_id: str, 
+    payload: DecisionPayload, 
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     if payload.decision not in ["GRANTED", "DENIED"]:
         raise HTTPException(status_code=400, detail="Invalid decision (must be GRANTED or DENIED)")
 
@@ -916,6 +1171,30 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         raise HTTPException(status_code=404, detail="Consent request not found")
 
     req = dict(req_row)
+
+    # Enforce ownership: Data Principal can only submit decisions for their own requests.
+    # Resolve the authenticated user's canonical dp_id using the same logic as registration
+    # and Gmail-webhook ingestion (link_or_create_data_principal on the normalized email).
+    # This handles cases where the users.data_principal_id column was null or stale
+    # (e.g., the user registered before email-normalization was introduced, or before
+    # sync_and_normalize_data_principals ran). The RBAC check is NOT weakened: we still
+    # require the request's dp_id to match the dp_id derived from the authenticated user's
+    # own verified email — no other user's dp_id can satisfy this check.
+    user_dp_id = current_user.get("dp_id")
+    if not user_dp_id:
+        # Fall back: re-derive dp_id from the authenticated user's normalized email,
+        # using the same canonical function used during Gmail-sync ingestion.
+        _, norm_user_email = normalize_email_address(current_user.get("email", ""))
+        if norm_user_email:
+            user_dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+
+    if req["data_principal_id"] != user_dp_id:
+        conn.close()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to make a decision on another Data Principal's consent request."
+        )
+
     now = datetime.utcnow().isoformat() + "Z"
 
     if check_request_expiry(req, conn):
@@ -927,7 +1206,7 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
-            f"AUD-{random.randint(100, 999)}",
+            f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}",
             req["id"],
             "N/A",
             req["data_principal_id"],
@@ -1083,12 +1362,23 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         dp_row = cursor.fetchone()
         dp_dict = dict(dp_row) if dp_row else {}
 
+        principal_name = dp_dict.get("name")
+        if not principal_name:
+            cursor.execute("SELECT name FROM users WHERE data_principal_id = ? LIMIT 1;", (req["data_principal_id"],))
+            u_row = cursor.fetchone()
+            if u_row and u_row["name"]:
+                principal_name = u_row["name"]
+        if not principal_name:
+            principal_name = current_user.get("name") or "Data Principal"
+
+        principal_email = dp_dict.get("email") or current_user.get("email") or ""
+
         consent_record = {
             "consentId": consent_id,
             "requestId": req["id"],
             "principalId": req["data_principal_id"],
-            "principalName": dp_dict.get("name") or "Prerna Pandey",
-            "principalEmail": dp_dict.get("email") or "",
+            "principalName": principal_name,
+            "principalEmail": principal_email,
             "fiduciary": req["fiduciary_name"],
             "fiduciaryCategory": req["fiduciary_category"],
             "fiduciaryLogo": req["fiduciary_logo"],
@@ -1098,15 +1388,15 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
             "status": "ACTIVE",
             "grantedOn": now,
             "expiresOn": expiry,
-            "grantedAttributes": payload.selected_attributes,
-            "deniedAttributes": payload.denied_attributes,
+            "grantedAttributes": readable_granted,
+            "deniedAttributes": readable_denied,
             "dpoContact": req["dpo_email"],
             "dataRegion": req["data_region"],
             "receiptHash": receipt_hash,
             "customNote": payload.remark
         }
 
-    audit_id = f"AUD-{random.randint(100, 999)}"
+    audit_id = f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}"
     audit_action = "CONSENT_GRANTED" if payload.decision == "GRANTED" else "CONSENT_DENIED"
     audit_details = f"Granted {len(payload.selected_attributes)} attributes." if payload.decision == "GRANTED" else f"Consent request declined. Reason: {payload.remark or 'Declined'}"
 
@@ -1147,7 +1437,7 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
             match = re.search(r'<([^>]+)>', raw_from)
             actual_sender = match.group(1).strip() if match else (raw_from.strip() if "@" in raw_from else None)
 
-    recipient_email = actual_sender or req.get("fiduciary_email") or "compliance@fiduciary.com"
+    recipient_email = actual_sender or req.get("fiduciary_email") or req.get("dpo_email") or "compliance@fiduciary.com"
 
     notif_id = f"NOTIF-2026-{random.randint(1000, 9999)}"
     notif_details = {
@@ -1155,14 +1445,14 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         "token": req.get("token"),
         "requestId": req["id"],
         "fiduciaryName": req["fiduciary_name"],
-        "principalName": consent_record.get("principalName", "Data Principal") if consent_record else "Data Principal",
-        "principalEmail": consent_record.get("principalEmail", "") if consent_record else "",
+        "principalName": consent_record.get("principalName", principal_name) if consent_record else (current_user.get("name") or "Data Principal"),
+        "principalEmail": consent_record.get("principalEmail", principal_email) if consent_record else (current_user.get("email") or ""),
         "recipientEmail": recipient_email,
         "originalSubject": original_subject,
         "noticeId": req["notice_id"],
         "purpose": req["purpose"],
-        "selectedAttributes": payload.selected_attributes,
-        "deniedAttributes": payload.denied_attributes,
+        "selectedAttributes": readable_granted if payload.decision == "GRANTED" else [],
+        "deniedAttributes": readable_denied,
         "remark": payload.remark,
         "artifact": consent_record if consent_record else {
             "decision": payload.decision,
@@ -1202,7 +1492,7 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
     }
 
 @app.get("/api/notifications/pending")
-def list_pending_notifications():
+def list_pending_notifications(_authorized: bool = Depends(verify_webhook_secret)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM fiduciary_notifications WHERE status = 'PENDING' ORDER BY created_at ASC;")
@@ -1220,7 +1510,10 @@ def list_pending_notifications():
     return results
 
 @app.post("/api/notifications/{notification_id}/ack")
-def acknowledge_notification(notification_id: str):
+def acknowledge_notification(
+    notification_id: str,
+    _authorized: bool = Depends(verify_webhook_secret)
+):
     conn = get_db()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat() + "Z"
@@ -1231,18 +1524,19 @@ def acknowledge_notification(notification_id: str):
 
 
 @app.get("/api/consents")
-def list_consents(principalId: Optional[str] = Query(None)):
+def list_consents(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
-    rows = []
-    if principalId:
-        cursor.execute("SELECT * FROM consents WHERE data_principal_id = ? ORDER BY granted_on DESC;", (principalId,))
-        rows = cursor.fetchall()
-    
-    # If no results found for specific principalId or principalId not supplied, return all consents
-    if not rows:
-        cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
-        rows = cursor.fetchall()
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        cursor.execute("SELECT * FROM consents WHERE data_principal_id = ? ORDER BY granted_on DESC;", (dp_id,))
+    else:
+        fiduciary_name = current_user.get("fiduciary_name")
+        if fiduciary_name:
+            cursor.execute("SELECT * FROM consents WHERE fiduciary_name = ? ORDER BY granted_on DESC;", (fiduciary_name,))
+        else:
+            cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
+    rows = cursor.fetchall()
     conn.close()
 
     results = []
@@ -1281,7 +1575,7 @@ def list_consents(principalId: Optional[str] = Query(None)):
     return results
 
 @app.get("/api/consents/{consent_id}/receipt")
-def get_consent_receipt(consent_id: str):
+def get_consent_receipt(consent_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM consents WHERE consent_id = ?;", (consent_id,))
@@ -1291,6 +1585,10 @@ def get_consent_receipt(consent_id: str):
         raise HTTPException(status_code=404, detail="Consent record not found")
 
     consent = dict(row)
+    if current_user.get("role") == "DATA_PRINCIPAL" and consent["data_principal_id"] != current_user.get("dp_id"):
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You do not have permission to access this receipt.")
+
     cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (consent["data_principal_id"],))
     dp_row = cursor.fetchone()
     dp = dict(dp_row) if dp_row else {}
@@ -1309,12 +1607,18 @@ def get_consent_receipt(consent_id: str):
             "principalName": dp.get("name", "Data Principal"),
             "principalEmail": dp.get("email", ""),
             "principalId": dp.get("id", ""),
+            "sha256IntegrityHash": consent["receipt_hash"],
+            "receiptHash": consent["receipt_hash"],
             "verifiedSignature": consent["receipt_hash"]
         }
     }
 
 @app.post("/api/consents/{consent_id}/revoke")
-def revoke_consent(consent_id: str, payload: RevokePayload):
+def revoke_consent(
+    consent_id: str, 
+    payload: RevokePayload,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM consents WHERE consent_id = ?;", (consent_id,))
@@ -1324,6 +1628,10 @@ def revoke_consent(consent_id: str, payload: RevokePayload):
         raise HTTPException(status_code=404, detail="Active consent record not found")
 
     consent = dict(row)
+    if consent["data_principal_id"] != current_user.get("dp_id"):
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You can only revoke your own consent.")
+
     now = datetime.utcnow().isoformat() + "Z"
 
     cursor.execute("UPDATE consents SET status = 'REVOKED', revoked_on = ?, revocation_reason = ? WHERE consent_id = ?;", (now, payload.reason, consent_id))
@@ -1357,11 +1665,12 @@ def revoke_consent(consent_id: str, payload: RevokePayload):
 
 @app.get("/api/audit-logs")
 @app.get("/api/audit")
-def list_audit_logs(principalId: Optional[str] = Query(None)):
+def list_audit_logs(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
-    if principalId:
-        cursor.execute("SELECT * FROM audit_events WHERE data_principal_id = ? ORDER BY timestamp DESC;", (principalId,))
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        cursor.execute("SELECT * FROM audit_events WHERE data_principal_id = ? ORDER BY timestamp DESC;", (dp_id,))
     else:
         cursor.execute("SELECT * FROM audit_events ORDER BY timestamp DESC;")
     rows = cursor.fetchall()
@@ -1378,7 +1687,10 @@ def list_audit_logs(principalId: Optional[str] = Query(None)):
 
 @app.post("/api/data-rights/request")
 @app.post("/api/data-rights")
-def create_dsr_request(payload: DSRRequestPayload):
+def create_dsr_request(
+    payload: DSRRequestPayload,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1386,7 +1698,7 @@ def create_dsr_request(payload: DSRRequestPayload):
     now = datetime.utcnow()
     sla = (now + timedelta(days=30)).isoformat() + "Z"
     now_str = now.isoformat() + "Z"
-    dp_id = payload.dataPrincipalId or generate_data_principal_id("pandeyprerna1407@gmail.com")
+    dp_id = current_user.get("dp_id")
 
     cursor.execute("""
     INSERT INTO data_rights_requests (id, data_principal_id, request_type, target_fiduciary, details, status, sla_deadline, created_at)
@@ -1431,13 +1743,18 @@ def create_dsr_request(payload: DSRRequestPayload):
     }
 
 @app.get("/api/data-rights")
-def list_dsr_requests(principalId: Optional[str] = Query(None)):
+def list_dsr_requests(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
-    if principalId:
-        cursor.execute("SELECT * FROM data_rights_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (principalId,))
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        cursor.execute("SELECT * FROM data_rights_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
     else:
-        cursor.execute("SELECT * FROM data_rights_requests ORDER BY created_at DESC;")
+        fiduciary_name = current_user.get("fiduciary_name")
+        if fiduciary_name:
+            cursor.execute("SELECT * FROM data_rights_requests WHERE target_fiduciary = ? ORDER BY created_at DESC;", (fiduciary_name,))
+        else:
+            cursor.execute("SELECT * FROM data_rights_requests ORDER BY created_at DESC;")
     rows = cursor.fetchall()
     conn.close()
 
@@ -1453,7 +1770,10 @@ def list_dsr_requests(principalId: Optional[str] = Query(None)):
     return results
 
 @app.post("/api/grievance")
-def submit_grievance(payload: GrievancePayload):
+def submit_grievance(
+    payload: GrievancePayload,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1461,7 +1781,7 @@ def submit_grievance(payload: GrievancePayload):
     now = datetime.utcnow()
     now_str = now.isoformat() + "Z"
     sla = (now + timedelta(days=7)).isoformat() + "Z"  # Statutory 7 working days SLA under DPDP Sec 13
-    dp_id = payload.dataPrincipalId or generate_data_principal_id("pandeyprerna1407@gmail.com")
+    dp_id = current_user.get("dp_id")
 
     # Look up fiduciary metadata, thread_id, and contact info
     thread_id = None
@@ -1590,38 +1910,19 @@ def submit_grievance(payload: GrievancePayload):
     }
 
 @app.get("/api/nominee")
-def get_nominee(principalId: Optional[str] = Query(None), email: Optional[str] = Query(None)):
+def get_nominee(current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))):
     conn = get_db()
     cursor = conn.cursor()
 
-    row = None
-    if principalId and email:
-        cursor.execute("""
-        SELECT * FROM statutory_nominees 
-        WHERE (data_principal_id = ? OR principal_email = ?) AND status = 'ACTIVE_VERIFIED'
-        ORDER BY date_designated DESC LIMIT 1;
-        """, (principalId, email))
-        row = cursor.fetchone()
-    elif principalId:
-        cursor.execute("""
-        SELECT * FROM statutory_nominees 
-        WHERE data_principal_id = ? AND status = 'ACTIVE_VERIFIED'
-        ORDER BY date_designated DESC LIMIT 1;
-        """, (principalId,))
-        row = cursor.fetchone()
-    elif email:
-        cursor.execute("""
-        SELECT * FROM statutory_nominees 
-        WHERE principal_email = ? AND status = 'ACTIVE_VERIFIED'
-        ORDER BY date_designated DESC LIMIT 1;
-        """, (email,))
-        row = cursor.fetchone()
+    dp_id = current_user.get("dp_id")
+    email = current_user.get("email")
 
-    # Fallback to any active nominee if specific query returned nothing
-    if not row:
-        cursor.execute("SELECT * FROM statutory_nominees WHERE status = 'ACTIVE_VERIFIED' ORDER BY date_designated DESC LIMIT 1;")
-        row = cursor.fetchone()
-
+    cursor.execute("""
+    SELECT * FROM statutory_nominees 
+    WHERE (data_principal_id = ? OR principal_email = ?) AND status = 'ACTIVE_VERIFIED'
+    ORDER BY date_designated DESC LIMIT 1;
+    """, (dp_id, email))
+    row = cursor.fetchone()
     conn.close()
 
     if not row:
@@ -1645,7 +1946,10 @@ def get_nominee(principalId: Optional[str] = Query(None), email: Optional[str] =
     }
 
 @app.post("/api/nominee")
-def save_nominee(payload: NomineePayload):
+def save_nominee(
+    payload: NomineePayload,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1654,8 +1958,8 @@ def save_nominee(payload: NomineePayload):
     now_str = now.isoformat() + "Z"
     date_str = now.strftime("%Y-%m-%d")
 
-    principal_email = payload.principalEmail or "pandeyprerna1407@gmail.com"
-    dp_id = payload.dataPrincipalId or generate_data_principal_id(principal_email)
+    dp_id = current_user.get("dp_id")
+    principal_email = current_user.get("email")
 
     # Check if active nominee already exists for this principal
     cursor.execute("""
@@ -1762,17 +2066,15 @@ def save_nominee(payload: NomineePayload):
     }
 
 @app.delete("/api/nominee")
-def remove_nominee(principalId: Optional[str] = Query(None), email: Optional[str] = Query(None)):
+def remove_nominee(current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))):
     conn = get_db()
     cursor = conn.cursor()
 
     now_str = datetime.utcnow().isoformat() + "Z"
-    dp_id = principalId or (generate_data_principal_id(email) if email else None)
+    dp_id = current_user.get("dp_id")
+    email = current_user.get("email")
 
-    if dp_id:
-        cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ? WHERE data_principal_id = ? OR principal_email = ?;", (now_str, dp_id, email))
-    else:
-        cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ?;", (now_str,))
+    cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ? WHERE data_principal_id = ? OR principal_email = ?;", (now_str, dp_id, email))
 
     # Log revocation in audit log
     cursor.execute("""

@@ -243,3 +243,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 >>>>>>> f6a62903aaee8342dde9b2baa3dda9d79cdc1ed5
+
+
+*.db.bak
+*.db.bak_*
+backend/*.bak
+backend/*.bak_*

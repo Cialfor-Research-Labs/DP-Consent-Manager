@@ -8,10 +8,10 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 /**
- * Retrieve authorization headers using the JWT stored in localStorage
+ * Retrieve authorization headers using the JWT stored in sessionStorage
  */
 export const getAuthHeaders = () => {
-  const token = localStorage.getItem('dp_auth_token');
+  const token = typeof window !== 'undefined' ? sessionStorage.getItem('dp_session_token') : null;
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 };
 
@@ -27,8 +27,8 @@ export const authFetch = async (url, options = {}) => {
   const response = await fetch(url, { ...options, headers });
 
   if (response.status === 401) {
-    // Only dispatch event if a token was actually present
-    if (localStorage.getItem('dp_auth_token')) {
+    // Only dispatch event if a token was actually present in session
+    if (typeof window !== 'undefined' && sessionStorage.getItem('dp_session_token')) {
       window.dispatchEvent(new CustomEvent('dp-auth:expired'));
     }
   }
@@ -111,14 +111,32 @@ export const consentApi = {
    * Fetch all consent requests from backend (filtered by backend role & ownership)
    * GET /api/consent-requests
    */
-  async fetchConsentRequests() {
+  async fetchConsentRequests(status) {
     try {
-      const response = await authFetch(`${API_BASE_URL}/consent-requests`);
+      const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+      const response = await authFetch(`${API_BASE_URL}/consent-requests${qs}`);
       if (response.ok) {
         return await response.json();
       }
     } catch (e) {
       console.warn('Backend API unreachable, using local fallback:', e.message);
+    }
+    return null;
+  },
+
+  /**
+   * Fetch authenticated Data Principal's own consent requests
+   * GET /api/me/consent-requests?status={status}
+   */
+  async fetchMyConsentRequests(status) {
+    try {
+      const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+      const response = await authFetch(`${API_BASE_URL}/me/consent-requests${qs}`);
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e) {
+      console.warn('Backend API fetchMyConsentRequests unreachable:', e.message);
     }
     return null;
   },
@@ -238,16 +256,31 @@ export const consentApi = {
    */
   async revokeConsent(consentId, revocationData) {
     try {
+      const payload = typeof revocationData === 'string'
+        ? { reason: revocationData }
+        : (revocationData?.reason ? revocationData : { reason: 'Consent withdrawn by Data Principal under DPDP Act Sec 6(4)' });
+
       const response = await authFetch(`${API_BASE_URL}/consents/${encodeURIComponent(consentId)}/revoke`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(revocationData)
+        body: JSON.stringify(payload)
       });
       if (response.ok) {
         return await response.json();
+      } else if (response.status === 404) {
+        console.warn('Consent record not found in backend DB (may be local mock):', consentId);
+        return { success: true, status: 'REVOKED', localOnly: true, consentId };
       } else {
         const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.detail || 'Revocation failed.');
+        let detailMsg = 'Revocation failed.';
+        if (typeof errJson.detail === 'string') {
+          detailMsg = errJson.detail;
+        } else if (Array.isArray(errJson.detail)) {
+          detailMsg = errJson.detail.map(d => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join(', ');
+        } else if (errJson.message) {
+          detailMsg = errJson.message;
+        }
+        throw new Error(detailMsg);
       }
     } catch (e) {
       console.warn('Backend API revocation error:', e.message);

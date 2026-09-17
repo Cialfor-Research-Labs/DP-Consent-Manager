@@ -10,7 +10,7 @@ class DecisionPayload(BaseModel):
     consent_id: Optional[str] = None
 
 class RevokePayload(BaseModel):
-    reason: str
+    reason: Optional[str] = "Consent withdrawn by Data Principal under DPDP Act Sec 6(4)"
     revoked_at: Optional[str] = None
 
 class DSRRequestPayload(BaseModel):

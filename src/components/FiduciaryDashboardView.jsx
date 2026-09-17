@@ -323,20 +323,15 @@ export const FiduciaryDashboardView = () => {
 
       {/* SUB-VIEW 1: DISPATCHED REQUESTS TABLE */}
       {activeSubTab === 'requests' && (
-        <div style={{
-          background: 'var(--bg-card)',
-          borderRadius: '16px',
-          border: '1px solid var(--border-color)',
-          overflow: 'hidden'
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.86rem' }}>
+        <div className="glass-card table-container">
+          <table className="custom-table">
             <thead>
-              <tr style={{ background: 'var(--surface-subtle)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                <th style={{ padding: '14px 18px' }}>Notice ID</th>
-                <th style={{ padding: '14px 18px' }}>Data Principal</th>
-                <th style={{ padding: '14px 18px' }}>Processing Purpose</th>
-                <th style={{ padding: '14px 18px' }}>Status</th>
-                <th style={{ padding: '14px 18px' }}>Token / Portal Link</th>
+              <tr>
+                <th>Notice ID</th>
+                <th>Data Principal</th>
+                <th>Processing Purpose</th>
+                <th>Status</th>
+                <th>Token / Portal Link</th>
               </tr>
             </thead>
             <tbody>
@@ -344,47 +339,30 @@ export const FiduciaryDashboardView = () => {
                 const dp = r.dataPrincipal || {};
                 const tokenUrl = `${window.location.origin}/request/${r.token || r.id}`;
                 return (
-                  <tr key={r.id || r.notice_id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <td style={{ padding: '14px 18px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  <tr key={r.id || r.notice_id}>
+                    <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
                       {r.notice_id || r.noticeId || r.id}
                     </td>
-                    <td style={{ padding: '14px 18px' }}>
+                    <td>
                       <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{dp.name || 'Data Principal'}</div>
                       <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>{dp.email}</div>
                     </td>
-                    <td style={{ padding: '14px 18px', color: 'var(--text-secondary)' }}>
+                    <td style={{ color: 'var(--text-secondary)', maxWidth: '300px' }}>
                       {r.purpose || r.title}
                     </td>
-                    <td style={{ padding: '14px 18px' }}>
-                      <span style={{
-                        padding: '3px 8px',
-                        borderRadius: '6px',
-                        fontSize: '0.74rem',
-                        fontWeight: 700,
-                        background: r.status === 'GRANTED' ? 'rgba(16, 185, 129, 0.15)' : (r.status === 'DENIED' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)'),
-                        color: r.status === 'GRANTED' ? '#34d399' : (r.status === 'DENIED' ? '#f87171' : '#fbbf24')
-                      }}>
-                        {r.status || 'PENDING'}
+                    <td>
+                      <span className={`status-pill ${r.status === 'GRANTED' ? 'pill-emerald' : (r.status === 'DENIED' ? 'pill-rose' : 'pill-amber')}`}>
+                        ● {r.status || 'PENDING'}
                       </span>
                     </td>
-                    <td style={{ padding: '14px 18px' }}>
+                    <td>
                       <button
                         type="button"
                         onClick={() => copyToClipboard(tokenUrl, r.token || r.id)}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          padding: '5px 10px',
-                          borderRadius: '6px',
-                          border: '1px solid var(--border-color)',
-                          background: 'var(--surface-subtle)',
-                          color: copiedToken === (r.token || r.id) ? '#34d399' : 'var(--text-secondary)',
-                          fontSize: '0.74rem',
-                          cursor: 'pointer'
-                        }}
+                        className="btn btn-secondary btn-sm"
+                        style={{ fontSize: '0.74rem', padding: '4px 8px' }}
                       >
-                        {copiedToken === (r.token || r.id) ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+                        {copiedToken === (r.token || r.id) ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
                         <span>{copiedToken === (r.token || r.id) ? 'Copied!' : 'Copy Link'}</span>
                       </button>
                     </td>
@@ -398,47 +376,35 @@ export const FiduciaryDashboardView = () => {
 
       {/* SUB-VIEW 2: GRANTED CONSENTS */}
       {activeSubTab === 'consents' && (
-        <div style={{
-          background: 'var(--bg-card)',
-          borderRadius: '16px',
-          border: '1px solid var(--border-color)',
-          overflow: 'hidden'
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.86rem' }}>
+        <div className="glass-card table-container">
+          <table className="custom-table">
             <thead>
-              <tr style={{ background: 'var(--surface-subtle)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                <th style={{ padding: '14px 18px' }}>Consent ID</th>
-                <th style={{ padding: '14px 18px' }}>Notice ID</th>
-                <th style={{ padding: '14px 18px' }}>Status</th>
-                <th style={{ padding: '14px 18px' }}>Granted Attributes</th>
-                <th style={{ padding: '14px 18px' }}>SHA-256 Integrity Hash</th>
+              <tr>
+                <th>Consent ID</th>
+                <th>Notice ID</th>
+                <th>Status</th>
+                <th>Granted Attributes</th>
+                <th>SHA-256 Integrity Hash</th>
               </tr>
             </thead>
             <tbody>
               {consents.map((c) => (
-                <tr key={c.consentId || c.consent_id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '14px 18px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                <tr key={c.consentId || c.consent_id}>
+                  <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
                     {c.consentId || c.consent_id}
                   </td>
-                  <td style={{ padding: '14px 18px', color: 'var(--text-secondary)' }}>
+                  <td style={{ color: 'var(--text-secondary)' }}>
                     {c.noticeId || c.notice_id}
                   </td>
-                  <td style={{ padding: '14px 18px' }}>
-                    <span style={{
-                      padding: '3px 8px',
-                      borderRadius: '6px',
-                      fontSize: '0.74rem',
-                      fontWeight: 700,
-                      background: c.status === 'ACTIVE' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                      color: c.status === 'ACTIVE' ? '#34d399' : '#f87171'
-                    }}>
-                      {c.status}
+                  <td>
+                    <span className={`status-pill ${c.status === 'ACTIVE' ? 'pill-emerald' : 'pill-rose'}`}>
+                      ● {c.status}
                     </span>
                   </td>
-                  <td style={{ padding: '14px 18px', color: 'var(--text-secondary)' }}>
+                  <td style={{ color: 'var(--text-secondary)', maxWidth: '280px' }}>
                     {Array.isArray(c.grantedAttributes) ? c.grantedAttributes.join(', ') : 'All authorized attributes'}
                   </td>
-                  <td style={{ padding: '14px 18px', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
                     {c.receiptHash ? `${c.receiptHash.substring(0, 16)}...` : 'sha256:verified'}
                   </td>
                 </tr>
@@ -483,8 +449,8 @@ export const FiduciaryDashboardView = () => {
           )}
 
           <form onSubmit={handleDispatchSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            <div className="form-group">
+              <label className="form-label">
                 Data Principal Name
               </label>
               <input
@@ -493,20 +459,12 @@ export const FiduciaryDashboardView = () => {
                 value={dispatchName}
                 onChange={(e) => setDispatchName(e.target.value)}
                 placeholder="e.g. Rahul Verma"
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: '10px',
-                  background: 'var(--surface-subtle)',
-                  border: '1px solid var(--border-color)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.88rem'
-                }}
+                className="form-input"
               />
             </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            <div className="form-group">
+              <label className="form-label">
                 Data Principal Email
               </label>
               <input
@@ -515,34 +473,18 @@ export const FiduciaryDashboardView = () => {
                 value={dispatchEmail}
                 onChange={(e) => setDispatchEmail(e.target.value)}
                 placeholder="e.g. rahul.verma@delhiuniv.ac.in"
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: '10px',
-                  background: 'var(--surface-subtle)',
-                  border: '1px solid var(--border-color)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.88rem'
-                }}
+                className="form-input"
               />
             </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            <div className="form-group">
+              <label className="form-label">
                 Business Sector / Domain
               </label>
               <select
                 value={dispatchDomain}
                 onChange={(e) => setDispatchDomain(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: '10px',
-                  background: 'var(--surface-subtle)',
-                  border: '1px solid var(--border-color)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.88rem'
-                }}
+                className="form-select"
               >
                 <option value="Banking">Banking & Financial Services</option>
                 <option value="Healthcare">Healthcare & Diagnostics</option>
@@ -552,8 +494,8 @@ export const FiduciaryDashboardView = () => {
               </select>
             </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            <div className="form-group">
+              <label className="form-label">
                 Processing Purpose
               </label>
               <textarea
@@ -561,32 +503,15 @@ export const FiduciaryDashboardView = () => {
                 rows={3}
                 value={dispatchPurpose}
                 onChange={(e) => setDispatchPurpose(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: '10px',
-                  background: 'var(--surface-subtle)',
-                  border: '1px solid var(--border-color)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.88rem',
-                  resize: 'vertical'
-                }}
+                className="form-textarea"
+                style={{ resize: 'vertical' }}
               />
             </div>
 
             <button
               type="submit"
-              style={{
-                padding: '12px 20px',
-                borderRadius: '10px',
-                border: 'none',
-                background: 'var(--accent-gradient)',
-                color: '#ffffff',
-                fontWeight: 700,
-                fontSize: '0.9rem',
-                cursor: 'pointer',
-                marginTop: '6px'
-              }}
+              className="btn btn-primary"
+              style={{ marginTop: '6px' }}
             >
               Issue Digital Notice & Generate Token
             </button>
@@ -596,38 +521,33 @@ export const FiduciaryDashboardView = () => {
 
       {/* SUB-VIEW 4: AUDIT LOG */}
       {activeSubTab === 'audit' && (
-        <div style={{
-          background: 'var(--bg-card)',
-          borderRadius: '16px',
-          border: '1px solid var(--border-color)',
-          overflow: 'hidden'
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.86rem' }}>
+        <div className="glass-card table-container">
+          <table className="custom-table">
             <thead>
-              <tr style={{ background: 'var(--surface-subtle)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                <th style={{ padding: '14px 18px' }}>Event ID</th>
-                <th style={{ padding: '14px 18px' }}>Action</th>
-                <th style={{ padding: '14px 18px' }}>Data Principal ID</th>
-                <th style={{ padding: '14px 18px' }}>Details</th>
-                <th style={{ padding: '14px 18px' }}>Timestamp</th>
+              <tr>
+                <th>Event ID</th>
+                <th>Action</th>
+                <th>Data Principal ID</th>
+                <th>Details</th>
+                <th>Timestamp</th>
               </tr>
             </thead>
             <tbody>
               {auditLogs.map((log) => (
-                <tr key={log.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '14px 18px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                <tr key={log.id}>
+                  <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
                     {log.id}
                   </td>
-                  <td style={{ padding: '14px 18px', fontWeight: 600, color: '#c084fc' }}>
+                  <td style={{ fontWeight: 600, color: 'var(--accent-primary)' }}>
                     {log.action}
                   </td>
-                  <td style={{ padding: '14px 18px', fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                     {log.data_principal_id}
                   </td>
-                  <td style={{ padding: '14px 18px', color: 'var(--text-secondary)' }}>
+                  <td style={{ color: 'var(--text-secondary)', maxWidth: '300px' }}>
                     {log.details}
                   </td>
-                  <td style={{ padding: '14px 18px', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                  <td style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
                     {log.timestamp}
                   </td>
                 </tr>

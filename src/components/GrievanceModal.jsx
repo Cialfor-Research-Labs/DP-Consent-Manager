@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useConsent } from '../context/ConsentContext';
-import { HelpCircle, Send, ShieldAlert } from 'lucide-react';
+import { HelpCircle, Send } from 'lucide-react';
 
 export const GrievanceModal = () => {
   const { grievanceModalOpen, setGrievanceModalOpen, grievanceTarget, submitGrievance, t } = useConsent();
@@ -28,26 +28,25 @@ export const GrievanceModal = () => {
     <div className="modal-overlay">
       <div className="modal-card">
         <div className="modal-header">
-          <div className="modal-title" style={{ color: '#818cf8' }}>
+          <div className="modal-title" style={{ color: 'var(--accent-primary)' }}>
             <HelpCircle size={24} /> {t('grievanceModalTitle')}
           </div>
           <button className="close-btn" onClick={() => setGrievanceModalOpen(false)}>✕</button>
         </div>
 
-        <div style={{ background: 'rgba(255, 255, 255, 0.04)', borderRadius: '10px', padding: '12px 16px', marginBottom: '20px', fontSize: '0.88rem' }}>
-          <div><strong>Target Fiduciary:</strong> {grievanceTarget.fiduciary}</div>
-          <div><strong>DPO Contact:</strong> {grievanceTarget.dpoEmail || grievanceTarget.dpoContact || 'dpo@fiduciary.org'}</div>
-          {grievanceTarget.consentId && <div><strong>Consent ID:</strong> {grievanceTarget.consentId}</div>}
+        <div style={{ background: 'var(--bg-card-subtle)', borderRadius: 'var(--radius-md)', padding: '14px 16px', marginBottom: '20px', fontSize: '0.86rem', border: '1px solid var(--border-color)' }}>
+          <div style={{ marginBottom: '4px' }}><strong>Target Fiduciary:</strong> {grievanceTarget.fiduciary}</div>
+          <div style={{ marginBottom: '4px' }}><strong>DPO Contact:</strong> {grievanceTarget.dpoEmail || grievanceTarget.dpoContact || 'dpo@fiduciary.org'}</div>
+          {grievanceTarget.consentId && <div><strong>Consent ID:</strong> <code className="code-accent">{grievanceTarget.consentId}</code></div>}
         </div>
 
         <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+          <div className="form-group">
+            <label className="form-label">
               {t('grievanceTypeLabel')}:
             </label>
             <select 
-              className="btn-secondary"
-              style={{ width: '100%', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+              className="form-select"
               value={type}
               onChange={(e) => setType(e.target.value)}
             >
@@ -59,13 +58,13 @@ export const GrievanceModal = () => {
             </select>
           </div>
 
-          <div style={{ marginBottom: '24px' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+          <div className="form-group">
+            <label className="form-label">
               {t('descriptionLabel')}:
             </label>
             <textarea 
-              className="btn-secondary"
-              style={{ width: '100%', height: '110px', padding: '12px', borderRadius: '10px', fontSize: '0.9rem', resize: 'none' }}
+              className="form-textarea"
+              style={{ height: '110px', resize: 'none' }}
               placeholder="Describe your grievance or data rights concern in detail..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}

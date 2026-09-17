@@ -13,11 +13,11 @@ export const AuditLogView = () => {
           <p>{t('auditTrailSub')}</p>
         </div>
 
-        <div style={{ background: 'rgba(99, 102, 241, 0.1)', border: '1px solid var(--border-highlight)', padding: '12px 20px', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Lock size={20} style={{ color: '#818cf8' }} />
+        <div style={{ background: 'var(--accent-soft)', border: '1px solid var(--border-highlight)', padding: '10px 16px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Lock size={18} style={{ color: 'var(--accent-primary)' }} />
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#a5b4fc', fontWeight: 700 }}>Registry Integrity</div>
-            <div style={{ fontSize: '0.88rem', color: 'var(--text-primary)', fontWeight: 600 }}>Tamper-Evident Hash Chain</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Registry Integrity</div>
+            <div style={{ fontSize: '0.84rem', color: 'var(--text-primary)', fontWeight: 700 }}>Tamper-Evident Hash Chain</div>
           </div>
         </div>
       </div>

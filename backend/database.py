@@ -8,10 +8,36 @@ import hashlib
 import re
 import email.utils
 
-DB_FILE = os.path.join(os.path.dirname(__file__), "consent_manager.db")
+DEFAULT_DB_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "consent_manager.db"))
+
+def get_db_path() -> str:
+    """
+    Resolves active database path:
+    1. Checks TEST_DATABASE_URL or DATABASE_PATH or TEST_DATABASE_PATH env vars
+    2. Strips 'sqlite:///' or 'sqlite://' prefixes if formatted as URL
+    3. Falls back to DEFAULT_DB_FILE (consent_manager.db)
+    """
+    env_path = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_PATH") or os.getenv("TEST_DATABASE_PATH")
+    if env_path:
+        path_str = str(env_path).strip()
+        if path_str.startswith("sqlite:///"):
+            path_str = path_str[len("sqlite:///"):]
+        elif path_str.startswith("sqlite://"):
+            path_str = path_str[len("sqlite://"):]
+        return os.path.abspath(path_str)
+    return DEFAULT_DB_FILE
+
+# For backward compatibility with modules importing DB_FILE
+DB_FILE = DEFAULT_DB_FILE
 
 def get_db():
-    conn = sqlite3.connect(DB_FILE)
+    active_path = get_db_path()
+    conn = sqlite3.connect(active_path, timeout=30.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -264,6 +290,13 @@ def init_db():
             cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN message_id TEXT;")
         except Exception:
             pass
+
+    # High-performance idempotency indexes for Gmail deduplication
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_consent_requests_message_id ON consent_requests(message_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_snapshots_message_id ON email_snapshots(message_id);")
+    except Exception:
+        pass
 
     cursor.execute("SELECT COUNT(*) FROM consent_requests;")
     count = cursor.fetchone()[0]

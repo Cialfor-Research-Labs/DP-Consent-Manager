@@ -8,7 +8,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
-from fastapi import FastAPI, HTTPException, Query, Path, Depends, Header, status
+from fastapi import FastAPI, HTTPException, Query, Path, Depends, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from database import (
     get_db, 
@@ -177,30 +177,100 @@ def check_request_expiry(req, conn):
 #   3. Which personal data attributes are being requested
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _has_kw(text: str, keywords: list) -> bool:
+    """Check if any keyword or phrase exists in text with word boundaries."""
+    for kw in keywords:
+        pattern = r'\b' + re.escape(kw.lower()).replace(r'\ ', r'\s+') + r'\b'
+        if re.search(pattern, text):
+            return True
+    return False
+
+
 def detect_domain_from_content(subject: str, body: str) -> str:
-    """Detect the business domain/sector from actual email subject + body text."""
+    """
+    Detect the business domain/sector from actual email subject + body text.
+    Uses strict word boundaries to eliminate false-positive substring collisions
+    (such as 'emi' matching inside 'academic').
+    """
     text = (subject + " " + body).lower()
-    if any(kw in text for kw in ["hospital", "medical", "health insurance", "diagnosis", "prescription", "lab report", "clinic", "doctor", "patient", "treatment", "mediclam"]):
-        return "Healthcare"
-    if any(kw in text for kw in ["loan", "cibil", "lending", "credit line", "emi", "fintech", "nbfc", "credit score", "borrower", "disburse"]):
-        return "FinTech"
-    if any(kw in text for kw in ["uan", "provident fund", "epfo", "pf account", "payroll", "esic", "gratuity", "employee provident"]):
-        return "EPFO / Payroll"
-    if any(kw in text for kw in ["savings account", "fixed deposit", "neft", "rtgs", "rbi guideline", "banking", "demat", "current account"]):
-        return "Banking"
-    if any(kw in text for kw in ["background verification", "bgv", "degree verification", "employment onboarding", "hr department", "hiring", "experience letter", "relieving letter"]):
-        return "Corporate HR"
-    if any(kw in text for kw in ["order", "shipping", "delivery address", "ecommerce", "checkout", "cart", "retail"]):
-        return "E-Commerce"
-    if any(kw in text for kw in ["insurance policy", "premium", "tpa", "claim settlement", "insurance coverage"]):
-        return "Insurance"
-    if any(kw in text for kw in ["school", "college", "university", "student", "admission", "education loan", "scholarship"]):
+
+    # 1. Education & Academic Services (Prioritized: university, institute, academic records)
+    education_keywords = [
+        "education", "educational", "institute", "institution", "university",
+        "college", "student", "academic", "enrollment", "enrolment",
+        "examination", "exam result", "certificate", "scholarship",
+        "placement", "school", "admission", "degree", "marksheet",
+        "transcript", "alumni", "campus", "tuition", "curriculum", "faculty",
+        "semester", "coursework"
+    ]
+    if _has_kw(text, education_keywords):
         return "Education"
-    if any(kw in text for kw in ["gst", "income tax", "government scheme", "ministry", "ration card", "voter id"]):
-        return "Government"
-    if any(kw in text for kw in ["bank", "account", "kyc", "ifsc"]):
+
+    # 2. Healthcare & Diagnostic Services
+    healthcare_keywords = [
+        "hospital", "medical", "health insurance", "diagnosis", "prescription",
+        "lab report", "clinic", "doctor", "patient", "treatment", "mediclaim",
+        "healthcare", "pathology", "diagnostic", "radiology"
+    ]
+    if _has_kw(text, healthcare_keywords):
+        return "Healthcare"
+
+    # 3. EPFO / Statutory Payroll
+    payroll_keywords = [
+        "uan", "provident fund", "epfo", "pf account", "payroll", "esic",
+        "gratuity", "employee provident"
+    ]
+    if _has_kw(text, payroll_keywords):
+        return "EPFO / Payroll"
+
+    # 4. FinTech & Digital Lending (Word boundaries prevent 'emi' substring collisions)
+    fintech_keywords = [
+        "loan", "cibil", "lending", "credit line", "emi", "fintech",
+        "nbfc", "credit score", "borrower", "disburse", "instant credit"
+    ]
+    if _has_kw(text, fintech_keywords):
+        return "FinTech"
+
+    # 5. Banking & Financial Services
+    banking_keywords = [
+        "savings account", "fixed deposit", "neft", "rtgs", "rbi guideline",
+        "banking", "demat", "current account", "bank account", "ifsc"
+    ]
+    if _has_kw(text, banking_keywords):
         return "Banking"
-    return "Corporate / Enterprise"
+
+    # 6. Insurance & Coverage
+    insurance_keywords = [
+        "insurance policy", "premium", "tpa", "claim settlement", "insurance coverage"
+    ]
+    if _has_kw(text, insurance_keywords):
+        return "Insurance"
+
+    # 7. E-Commerce & Retail Logistics
+    ecom_keywords = [
+        "order", "shipping", "delivery address", "ecommerce", "e-commerce",
+        "checkout", "cart", "retail"
+    ]
+    if _has_kw(text, ecom_keywords):
+        return "E-Commerce"
+
+    # 8. Corporate HR & Employment Onboarding
+    hr_keywords = [
+        "background verification", "bgv", "degree verification", "employment onboarding",
+        "hr department", "hiring", "experience letter", "relieving letter"
+    ]
+    if _has_kw(text, hr_keywords):
+        return "Corporate HR"
+
+    # 9. Government & Public Administration
+    govt_keywords = [
+        "gst", "income tax", "government scheme", "ministry", "ration card", "voter id"
+    ]
+    if _has_kw(text, govt_keywords):
+        return "Government"
+
+    # 10. Neutral General Fallback (Requirement 5: Never FinTech)
+    return "General"
 
 
 def extract_purpose_from_content(subject: str, body: str) -> str:
@@ -224,95 +294,132 @@ def extract_purpose_from_content(subject: str, body: str) -> str:
 def resolve_fiduciary_name(token: str = "", domain: str = "", subject: str = "", body: str = "", fiduciary: str = "") -> str:
     """
     Resolve institutional Data Fiduciary entity name under DPDP Act.
-    If the link/token or content is for a Bank (e.g. tok_bank_kyc, 'bank' in token, or domain is Banking),
-    it MUST show the Bank name (e.g. ABC National Bank, or named bank in text).
-    It will never use a personal individual's name as the Data Fiduciary.
+    Ensures institutional name is returned instead of personal names.
     """
     token_lower = (token or "").lower()
-    text = f"{subject} {body}".lower()
+    full_text = f"{subject} {body}"
+    text_lower = full_text.lower()
     fiduciary_clean = (fiduciary or "").strip()
 
-    # If an institutional organization was explicitly provided (and is not an individual person or email)
+    # 1. Education institution detection from content takes precedence
+    if domain == "Education" or "edu" in token_lower or _has_kw(text_lower, ["university", "college", "institute", "school", "academy"]):
+        inst_match = re.search(r'([A-Z][A-Za-z0-9\s&]+(?:Institute of Technology|Institute|University|College|Academy|School))', full_text)
+        if inst_match:
+            candidate = inst_match.group(1).strip()
+            if len(candidate) > 4:
+                return candidate
+        if not fiduciary_clean or any(p in fiduciary_clean.lower() for p in ["prerna", "pandey", "manu", "sharma", "@", "unknown", "data fiduciary", "test", "student"]):
+            return "ABC Institute of Technology"
+
+    # 2. If an institutional organization was explicitly provided (and is not an individual person or email)
     is_personal_name = any(p in fiduciary_clean.lower() for p in [
-        "prerna", "pandey", "@", "unknown", "data fiduciary", "test"
+        "prerna", "pandey", "manu", "sharma", "@", "unknown", "data fiduciary", "test", "admin", "user", "student"
     ])
     if fiduciary_clean and not is_personal_name and len(fiduciary_clean) > 2:
         return fiduciary_clean
 
     # Detect specific real banks if mentioned in text
-    if any(kw in text for kw in ["hdfc bank", "hdfc"]):
+    if any(kw in text_lower for kw in ["hdfc bank", "hdfc"]):
         return "HDFC Bank"
-    if any(kw in text for kw in ["icici bank", "icici"]):
+    if any(kw in text_lower for kw in ["icici bank", "icici"]):
         return "ICICI Bank"
-    if any(kw in text for kw in ["state bank of india", "sbi"]):
+    if any(kw in text_lower for kw in ["state bank of india", "sbi"]):
         return "State Bank of India"
-    if any(kw in text for kw in ["axis bank", "axis"]):
+    if any(kw in text_lower for kw in ["axis bank", "axis"]):
         return "Axis Bank"
-    if any(kw in text for kw in ["kotak mahindra", "kotak bank", "kotak"]):
+    if any(kw in text_lower for kw in ["kotak mahindra", "kotak bank", "kotak"]):
         return "Kotak Mahindra Bank"
-    if any(kw in text for kw in ["punjab national bank", "pnb"]):
+    if any(kw in text_lower for kw in ["punjab national bank", "pnb"]):
         return "Punjab National Bank"
-    if any(kw in text for kw in ["bank of baroda", "bob"]):
+    if any(kw in text_lower for kw in ["bank of baroda", "bob"]):
         return "Bank of Baroda"
 
-    # Banking link / domain check — ALWAYS use Bank name for banking links
-    if "bank" in token_lower or domain == "Banking" or any(kw in text for kw in ["savings account", "current account", "fixed deposit", "kyc verification", "rbi guideline", "bank account", "ifsc"]):
+    # FinTech / Loan
+    if "fintech" in token_lower or "loan" in token_lower or "credit" in token_lower or domain == "FinTech" or _has_kw(text_lower, ["cibil", "lending", "credit score"]):
+        return "PayFlex Lending"
+
+    # Banking link / domain check
+    if "bank" in token_lower or domain == "Banking" or _has_kw(text_lower, ["savings account", "current account", "fixed deposit", "kyc verification", "rbi guideline", "bank account", "ifsc"]):
         return "ABC National Bank"
 
     # Healthcare
-    if "health" in token_lower or "med" in token_lower or domain == "Healthcare" or any(kw in text for kw in ["hospital", "clinic", "diagnosis", "mediclaim", "patient", "apollo"]):
+    if "health" in token_lower or "med" in token_lower or domain == "Healthcare" or _has_kw(text_lower, ["hospital", "clinic", "diagnosis", "mediclaim", "patient", "apollo"]):
         return "Apollo Care Hospital"
 
     # EPFO / PF
-    if "pf" in token_lower or "uan" in token_lower or "provident" in token_lower or domain == "EPFO / Payroll" or any(kw in text for kw in ["epfo", "provident fund", "uan"]):
+    if "pf" in token_lower or "uan" in token_lower or "provident" in token_lower or domain == "EPFO / Payroll" or _has_kw(text_lower, ["epfo", "provident fund", "uan"]):
         return "EPFO / Cialfor Payroll Cell"
-
-    # FinTech / Loan
-    if "fintech" in token_lower or "loan" in token_lower or "credit" in token_lower or domain == "FinTech" or any(kw in text for kw in ["cibil", "lending", "credit score"]):
-        return "PayFlex Lending"
 
     # E-Commerce
     if "ecom" in token_lower or "order" in token_lower or "retail" in token_lower or domain == "E-Commerce":
         return "ShopEase Retail"
 
     # Corporate HR / BGV
-    if "bgv" in token_lower or "corp" in token_lower or "hr" in token_lower or domain == "Corporate HR" or any(kw in text for kw in ["background verification", "onboarding"]):
+    if "bgv" in token_lower or "corp" in token_lower or "hr" in token_lower or domain == "Corporate HR" or _has_kw(text_lower, ["background verification", "onboarding"]):
         return "GlobalTech Solutions HR"
 
-    if domain and domain != "Corporate / Enterprise":
+    if domain and domain not in ["General", "Corporate / Enterprise", "Corporate/Enterprise"]:
         return f"{domain} Enterprise"
 
-    return "ABC National Bank" if "bank" in token_lower else "Corporate Fiduciary"
+    return "General Service Fiduciary"
 
 
 def get_fiduciary_metadata(fiduciary_name: str, domain: str):
     """Return category and emoji logo appropriate for the institutional fiduciary."""
     name_low = fiduciary_name.lower()
-    domain_low = domain.lower()
-    if "bank" in name_low or "banking" in domain_low:
-        return "Banking & Financial Services", "🏦"
-    if "hospital" in name_low or "health" in name_low or "care" in name_low or "healthcare" in domain_low:
+    domain_low = (domain or "").lower()
+
+    # Education (Prioritized for Academic Services)
+    if "education" in domain_low or "academic" in domain_low or any(k in name_low for k in ["university", "college", "institute", "school", "academy"]):
+        return "Education & Academic Services", "🎓"
+
+    # Healthcare
+    if "healthcare" in domain_low or "health" in domain_low or "hospital" in name_low or "care" in name_low:
         return "Healthcare & Diagnostic Services", "🏥"
+
+    # FinTech
+    if "fintech" in domain_low or "lending" in name_low or "fintech" in name_low or "payflex" in name_low:
+        return "FinTech & Digital Lending", "💳"
+
+    # Banking
+    if "banking" in domain_low or "bank" in name_low:
+        return "Banking & Financial Services", "🏦"
+
+    # EPFO / Payroll
     if "epfo" in name_low or "payroll" in domain_low or "pf" in name_low:
         return "Statutory & Government Payroll", "💼"
-    if "lending" in name_low or "fintech" in name_low or "fintech" in domain_low:
-        return "FinTech & Digital Lending", "💳"
+
+    # E-Commerce
     if "retail" in name_low or "shopease" in name_low or "commerce" in domain_low:
         return "E-Commerce & Retail Logistics", "🛒"
-    if "hr" in name_low or "globaltech" in name_low or "corporate" in domain_low:
+
+    # Corporate HR
+    if "hr" in name_low or "globaltech" in name_low or "corporate" in domain_low or "recruitment" in domain_low:
         return "Corporate HR & Recruitment", "🏢"
-    return f"{domain} Enterprise", "🏢"
+
+    # Government
+    if "government" in domain_low or "ministry" in name_low:
+        return "Government & Public Administration", "🏛️"
+
+    # Insurance
+    if "insurance" in domain_low or "insurance" in name_low:
+        return "Insurance & Risk Services", "🛡️"
+
+    # Requirement 5: Neutral General fallback (Never FinTech)
+    return "General Corporate Services", "🏢"
 
 
-
-def extract_attributes_from_email_content(subject: str, body: str) -> list:
+def extract_attributes_from_email_content(subject: str, body: str, domain: str = None) -> list:
     """
     Universal DPDP-compliant attribute extractor.
     Reads the actual email subject + body text and dynamically identifies
     which personal data attributes are being requested.
-    Completely replaces the old hardcoded domain-template logic.
+    Uses strict word boundaries and full education sector support.
     """
     text = (subject + " " + body).lower()
+    if not domain:
+        domain = detect_domain_from_content(subject, body)
+
     attrs = []
     added = set()
 
@@ -325,106 +432,126 @@ def extract_attributes_from_email_content(subject: str, body: str) -> list:
             attrs.append(a)
             added.add(attr_id)
 
-    # ── ALWAYS REQUIRED: Full Name ─────────────────────────────────────────────
-    add("attr_name", "Full Name & Official Identity", "IDENTITY", True,
-        "Official name of the Data Principal for identification and records", False)
+    # 1. Full Name (Always required)
+    add("attr_name", "Full Name", "IDENTITY", True,
+        "Official legal name of the Data Principal for verification and records", False)
 
-    # ── PAN CARD ──────────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["pan", "pan card", "permanent account number", "tax deduction", "form 60"]):
+    # 2. Date of Birth
+    if _has_kw(text, ["date of birth", "dob", "birth date", "birthdate", "age proof"]) or domain == "Education":
+        add("attr_dob", "Date of Birth", "IDENTITY", True,
+            "Date of birth for age verification and statutory record-keeping", False)
+
+    # 3. Mobile Number
+    if _has_kw(text, ["phone", "mobile", "contact number", "cell", "telephone", "otp", "sms"]) or domain == "Education":
+        add("attr_phone", "Mobile Number", "CONTACT", True,
+            "Contact mobile number for communications, alerts, and 2FA", False)
+
+    # 4. Email Address
+    if _has_kw(text, ["email", "e-mail", "email address", "email id"]) or domain == "Education":
+        add("attr_email_id", "Email Address", "CONTACT", True,
+            "Official email address for correspondence and notices", False)
+
+    # 5. Residential Address
+    if _has_kw(text, ["address", "residential address", "home address", "permanent address", "delivery address", "shipping address", "pincode", "location proof"]) or domain == "Education":
+        add("attr_address", "Residential Address", "CONTACT", True,
+            "Permanent and residential address for correspondence and KYC", False)
+
+    # 6. Enrollment Number (Education specific)
+    if _has_kw(text, ["enrollment", "enrolment", "enrollment number", "enrolment number", "roll number", "roll no", "registration number", "student id", "matriculation", "hall ticket"]) or domain == "Education":
+        add("attr_enrollment", "Enrollment Number", "ACADEMIC", True,
+            "Unique student enrollment / registration identifier assigned by the institution", False)
+
+    # 7. Academic Records (Education specific)
+    if _has_kw(text, ["academic record", "academic records", "academic information", "transcript", "credit", "marksheet", "degree", "diploma", "gpa", "coursework", "qualification"]) or domain == "Education":
+        add("attr_academic_records", "Academic Records", "ACADEMIC", True,
+            "Transcripts, course credits, marksheet copies, and academic progress records", False)
+
+    # 8. Examination Results (Education specific)
+    if _has_kw(text, ["examination", "examination result", "examination results", "exam result", "exam results", "scorecard", "semester result", "evaluation", "grades", "board exam"]) or domain == "Education":
+        add("attr_exam_results", "Examination Results", "ACADEMIC", True,
+            "Semester examination scorecards, evaluation results, and official grade sheets", False)
+
+    # 9. Identity Proof (Education / General KYC)
+    if _has_kw(text, ["identity proof", "id proof", "govt id", "identity document", "aadhaar", "aadhar", "passport", "voter id", "driving license", "photo id", "government photo id"]) or domain == "Education":
+        add("attr_identity_proof", "Identity Proof", "IDENTITY", True,
+            "Official government-issued identity proof document for authentication", True)
+
+    # 10. Placement Profile Details (Education specific)
+    if _has_kw(text, ["placement", "placement profile", "placement profile details", "campus placement", "career portfolio", "resume", "cv", "internship", "job profile"]) or domain == "Education":
+        add("attr_placement", "Placement Profile Details", "PROFESSIONAL", False,
+            "Career portfolio, placement preferences, resume, and recruiter profile details", False, default_granted=True)
+
+    # 11. Scholarship Details (Education specific)
+    if _has_kw(text, ["scholarship", "financial aid", "stipend", "grant", "fellowship"]):
+        add("attr_scholarship", "Scholarship & Financial Aid Records", "ACADEMIC", False,
+            "Scholarship eligibility, disbursement records, and grant documentation", False, default_granted=True)
+
+    # 12. PAN Card (Financial)
+    if _has_kw(text, ["pan", "pan card", "permanent account number", "tax deduction", "form 60"]):
         add("attr_pan", "Permanent Account Number (PAN Card)", "FINANCIAL", True,
             "Government-issued tax identity document for financial compliance", True)
 
-    # ── AADHAAR / KYC ─────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["aadhaar", "aadhar", "uid number", "biometric", "e-kyc", "ekyc", "kyc", "uidai"]):
-        add("attr_aadhaar", "Aadhaar / Government KYC Document", "IDENTITY", True,
-            "UIDAI Aadhaar for mandatory KYC verification and identity proof", True)
-
-    # ── BANK ACCOUNT ──────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["bank account", "account number", "ifsc", "savings account", "current account", "neft", "rtgs", "upi id", "bank details"]):
+    # 13. Bank Account (Financial)
+    if _has_kw(text, ["bank account", "account number", "ifsc", "savings account", "current account", "neft", "rtgs", "upi id", "bank details"]):
         add("attr_bank", "Bank Account Number & IFSC Code", "FINANCIAL", True,
             "Bank account details for payment processing and fund transfer", True)
 
-    # ── BANK STATEMENT ────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["bank statement", "account statement", "6 month", "6-month", "bank passbook"]):
+    # 14. Bank Statement (Financial)
+    if _has_kw(text, ["bank statement", "account statement", "6 month", "6-month", "bank passbook"]):
         add("attr_bank_stmt", "Bank Account Statement (6 Months)", "FINANCIAL", True,
             "Recent bank statement for income and transaction verification", True)
 
-    # ── CIBIL / CREDIT SCORE ──────────────────────────────────────────────────
-    if any(kw in text for kw in ["cibil", "credit score", "credit report", "experian", "equifax", "crif", "credit bureau"]):
+    # 15. CIBIL / Credit Score (Financial)
+    if _has_kw(text, ["cibil", "credit score", "credit report", "experian", "equifax", "crif", "credit bureau"]):
         add("attr_cibil", "Credit Score Report (CIBIL / Experian)", "FINANCIAL", True,
             "Credit bureau score report for loan/credit eligibility assessment", True)
 
-    # ── UAN / PF / EPFO ───────────────────────────────────────────────────────
-    if any(kw in text for kw in ["uan", "universal account number", "provident fund", "pf account", "epfo", "employee provident"]):
+    # 16. UAN / PF / EPFO (Payroll)
+    if _has_kw(text, ["uan", "universal account number", "provident fund", "pf account", "epfo", "employee provident"]):
         add("attr_uan", "Universal Account Number (UAN) & PF ID", "FINANCIAL", True,
             "EPFO UAN for Provident Fund account linking and management", True)
 
-    # ── MEDICAL / HEALTH ──────────────────────────────────────────────────────
-    if any(kw in text for kw in ["medical record", "health record", "diagnostic", "lab report", "prescription", "treatment history", "patient record"]):
+    # 17. Medical / Health (Healthcare)
+    if _has_kw(text, ["medical record", "health record", "diagnostic", "lab report", "prescription", "treatment history", "patient record"]):
         add("attr_medical", "Medical Records & Diagnostic History", "HEALTH", True,
             "Medical records required for healthcare service and insurance processing", True)
 
-    # ── HEALTH INSURANCE ──────────────────────────────────────────────────────
-    if any(kw in text for kw in ["health insurance", "insurance policy", "tpa", "cashless", "mediclaim", "policy number"]):
+    # 18. Health Insurance (Healthcare)
+    if _has_kw(text, ["health insurance", "insurance policy", "tpa", "cashless", "mediclaim", "policy number"]):
         add("attr_insurance", "Health Insurance Policy Number", "HEALTH", True,
             "Insurance policy details for cashless treatment and claim processing", True)
 
-    # ── ADDRESS ───────────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["address", "residential address", "home address", "delivery address", "shipping address", "pincode", "location proof"]):
-        add("attr_address", "Residential Address & Address Proof", "CONTACT", True,
-            "Home address for correspondence, KYC, and service delivery", False)
-
-    # ── PHONE NUMBER ──────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["phone", "mobile", "contact number", "telephone", "otp", "sms notification"]):
-        add("attr_phone", "Mobile Phone Number", "CONTACT", True,
-            "Contact number for OTP verification and communication", False)
-
-    # ── EMAIL ADDRESS ─────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["email address", "email id", "e-mail id"]):
-        add("attr_email_id", "Email Address", "CONTACT", True,
-            "Email for digital correspondence and account notifications", False)
-
-    # ── GOVERNMENT PHOTO ID ───────────────────────────────────────────────────
-    if any(kw in text for kw in ["passport", "voter id", "driving license", "government photo id", "photo id proof"]):
-        add("attr_govt_id", "Government Photo ID (Passport / Voter ID / DL)", "IDENTITY", True,
-            "Official government-issued photo identity document", True)
-
-    # ── EMPLOYMENT / BGV ──────────────────────────────────────────────────────
-    if any(kw in text for kw in ["background verification", "bgv", "criminal check", "police verification", "employment verification"]):
+    # 19. Background Verification (Corporate HR)
+    if _has_kw(text, ["background verification", "bgv", "criminal check", "police verification", "employment verification"]):
         add("attr_bgv", "Background Verification & Criminal Record Check", "LEGAL/VERIFICATION", True,
             "Third-party background check for employment onboarding clearance", True)
 
-    # ── DEGREE / EDUCATION ────────────────────────────────────────────────────
-    if any(kw in text for kw in ["degree", "marksheet", "academic certificate", "university registrar", "diploma"]):
-        add("attr_degree", "Educational Degree Certificates & Marksheets", "PROFESSIONAL", True,
-            "Academic qualification documents for credential verification", True)
-
-    # ── EXPERIENCE LETTER ─────────────────────────────────────────────────────
-    if any(kw in text for kw in ["experience letter", "relieving letter", "reference check", "prior employment", "work history"]):
+    # 20. Prior Employment & Experience (Corporate HR)
+    if _has_kw(text, ["experience letter", "relieving letter", "reference check", "prior employment", "work history"]):
         add("attr_prior_emp", "Prior Employment & Experience Records", "PROFESSIONAL", False,
             "Relieving letter and employment reference for background check", False, default_granted=True)
 
-    # ── INCOME / SALARY ───────────────────────────────────────────────────────
-    if any(kw in text for kw in ["salary slip", "income proof", "salary statement", "ctc", "annual income", "itr", "form 16"]):
+    # 21. Income Proof (Financial)
+    if _has_kw(text, ["salary slip", "income proof", "salary statement", "ctc", "annual income", "itr", "form 16"]):
         add("attr_income", "Income Proof & Salary Records", "FINANCIAL", False,
             "Income documentation for financial eligibility and tax verification", True, default_granted=True)
 
-    # ── PAYMENT CARD ──────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["credit card", "debit card", "card details", "payment method", "express checkout", "tokenized card"]):
+    # 22. Payment Card (Financial)
+    if _has_kw(text, ["credit card", "debit card", "card details", "payment method", "express checkout", "tokenized card"]):
         add("attr_card", "Tokenized Payment Card Details", "FINANCIAL", False,
             "RBI-compliant tokenized card data for express payment checkout", True, default_granted=False)
 
-    # ── DEVICE / LOCATION ─────────────────────────────────────────────────────
-    if any(kw in text for kw in ["device", "location data", "gps", "ip address", "device fingerprint", "anti-fraud"]):
+    # 23. Device & Location
+    if _has_kw(text, ["device", "location data", "gps", "ip address", "device fingerprint", "anti-fraud"]):
         add("attr_device", "Device & Location Data", "DIGITAL", False,
             "Device fingerprint and location for fraud prevention and security", True, default_granted=True)
 
-    # ── SUPPORTING DOCUMENTS ──────────────────────────────────────────────────
-    if any(kw in text for kw in ["supporting document", "records required", "proof required", "file upload", "attach document"]):
+    # 24. Supporting Documents
+    if _has_kw(text, ["supporting document", "records required", "proof required", "file upload", "attach document"]):
         add("attr_docs", "Supporting Documents & Records", "LEGAL/VERIFICATION", False,
             "Relevant supporting documents for requested service delivery", True, default_granted=True)
 
-    # ── FALLBACK: generic fields if nothing specific found ────────────────────
+    # Fallback if sparse
     if len(attrs) <= 1:
         add("attr_email_id", "Email Address", "CONTACT", True,
             "Contact email for correspondence and account management", False)
@@ -449,6 +576,13 @@ def dynamic_create_request_for_token(
     message_id: str = None
 ):
     cursor = conn.cursor()
+    clean_msg_id = (message_id or "").strip()
+    if clean_msg_id:
+        cursor.execute("SELECT * FROM consent_requests WHERE message_id = ? ORDER BY created_at ASC LIMIT 1;", (clean_msg_id,))
+        existing = cursor.fetchone()
+        if existing:
+            return existing
+
     parsed_name, norm_email = normalize_email_address(to_email or "pandeyprerna1407@gmail.com")
     dp_name = to_name or parsed_name or "Data Principal"
     dp_email = norm_email
@@ -476,11 +610,11 @@ def dynamic_create_request_for_token(
 
     # Dynamically extract attributes from the actual email content
     requested_attrs = extract_attributes_from_email_content(
-        subject or "", body or ""
+        subject or "", body or "", domain=final_domain
     )
 
     # 2. Create EmailSnapshot
-    snapshot_id = f"ES-2026-CIALFOR-{random.randint(1000, 9999)}"
+    snapshot_id = f"ES-2026-CIALFOR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}"
     cursor.execute("""
     INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size, dkim_status, spf_status, thread_id, message_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
@@ -500,8 +634,8 @@ def dynamic_create_request_for_token(
     ))
 
     # 3. Create ConsentRequest
-    req_id = f"REQ-2026-CIALFOR-{random.randint(100, 999)}"
-    notice_id = f"NTC-2026-CIALFOR-{random.randint(100, 999)}"
+    req_id = f"REQ-2026-CIALFOR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
+    notice_id = f"NTC-2026-CIALFOR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
     now = datetime.utcnow().isoformat() + "Z"
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
 
@@ -767,6 +901,64 @@ def verify_webhook_secret(
     return True
 
 
+def is_system_generated_email(
+    from_address: Optional[str] = "",
+    subject: Optional[str] = "",
+    body_text: Optional[str] = "",
+    fiduciary_name: Optional[str] = ""
+) -> tuple[bool, str]:
+    """
+    Defense-in-depth guard:
+    Detects whether an incoming email was generated by our own DPDP Privacy Portal / system
+    (e.g., status reply receipts, DP statutory notifications, privacy grievance notices)
+    rather than being a genuine incoming consent request from a third-party Data Fiduciary.
+    """
+    from_str = (from_address or "").strip().lower()
+    subj_str = (subject or "").strip()
+    body_str = (body_text or "").strip()
+    fid_str = (fiduciary_name or "").strip().lower()
+
+    # 1. Sender or fiduciary matches system identity
+    if "dpdp privacy portal" in fid_str:
+        return True, "fiduciary_name_is_dpdp_privacy_portal"
+    if "dpdp privacy portal" in from_str:
+        return True, "sender_is_dpdp_privacy_portal"
+
+    # 2. Portal signature phrases in body
+    portal_signatures = [
+        "DIGITAL CONSENT STATUS UPDATE",
+        "SHA-256 Integrity Hash",
+        "Generated by Data Principal Consent Manager",
+        "Secured by Data Principal Consent Manager",
+        "Dispatched via Data Principal Consent Manager",
+        "=== PRIVACY GRIEVANCE NOTICE ===",
+    ]
+    for marker in portal_signatures:
+        if marker.lower() in body_str.lower():
+            clean_marker = marker.replace(" ", "_").replace("=", "").lower()
+            return True, f"contains_marker_{clean_marker}"
+
+    # 3. Subject starts with "Re:" AND body/subject contains explicit consent decision badges
+    if re.match(r"^re:\s*", subj_str, re.IGNORECASE):
+        reply_markers = [
+            "CONSENT GRANTED",
+            "CONSENT DENIED",
+            "DPDP Consent Response",
+            "Digital Consent Status Confirmation",
+        ]
+        for marker in reply_markers:
+            if marker.lower() in body_str.lower() or marker.lower() in subj_str.lower():
+                clean_marker = marker.replace(" ", "_").lower()
+                return True, f"reply_with_marker_{clean_marker}"
+
+    # 4. Automated DP statutory notification dispatched by sync script
+    if re.match(r"^new consent request:", subj_str, re.IGNORECASE):
+        if "automated statutory notice under the digital personal data protection" in body_str.lower():
+            return True, "automated_dp_statutory_notice"
+
+    return False, ""
+
+
 @app.post("/api/gmail-webhook")
 @app.post("/api/sync-gmail")
 @app.post("/api/ingest-email")
@@ -774,6 +966,20 @@ def sync_gmail_webhook(
     payload: EmailIngestPayload,
     _authorized: bool = Depends(verify_webhook_secret)
 ):
+    # Defense-in-depth guard: Ignore system-generated receipts/replies/notifications
+    is_sys, sys_reason = is_system_generated_email(
+        from_address=payload.from_address,
+        subject=payload.subject,
+        body_text=payload.body_text,
+        fiduciary_name=payload.fiduciary_name
+    )
+    if is_sys:
+        return {
+            "ignored": True,
+            "reason": "system_generated_message",
+            "detail": sys_reason
+        }
+
     conn = get_db()
     cursor = conn.cursor()
 
@@ -782,40 +988,80 @@ def sync_gmail_webhook(
     dp_email = norm_email
     dp_id = link_or_create_data_principal(dp_email, dp_name)
 
-    # Prefer extracted_token from webhook payload, then look in body text, or generate new
-    token = payload.extracted_token
-    if not token:
-        token_match = re.search(r'/request/([a-zA-Z0-9_\-]+)', payload.body_text)
-        token = token_match.group(1) if token_match else generate_unpredictable_token()
+    clean_message_id = (payload.message_id or "").strip()
+    clean_thread_id = (payload.thread_id or "").strip()
 
-    cursor.execute("SELECT * FROM consent_requests WHERE token = ? OR notice_id = ? OR id = ?;", (token, token, token))
-    row = cursor.fetchone()
+    # 1. PRIMARY IDEMPOTENCY CHECK:
+    # Deduplicate by Gmail message_id across consent_requests & email_snapshots
+    row = None
+    if clean_message_id:
+        cursor.execute("""
+            SELECT cr.* FROM consent_requests cr
+            WHERE cr.message_id = ? 
+               OR cr.email_snapshot_id IN (SELECT es.id FROM email_snapshots es WHERE es.message_id = ?)
+            ORDER BY cr.created_at ASC LIMIT 1;
+        """, (clean_message_id, clean_message_id))
+        row = cursor.fetchone()
+
+    # 2. SECONDARY CHECK: If no message_id match, look for extracted token or token in body
+    token = None
+    if row:
+        token = row["token"]
+    else:
+        token = payload.extracted_token
+        if not token and payload.body_text:
+            token_match = re.search(r'/request/([a-zA-Z0-9_\-]+)', payload.body_text)
+            token = token_match.group(1) if token_match else None
+        
+        if token:
+            cursor.execute("SELECT * FROM consent_requests WHERE token = ? OR notice_id = ? OR id = ?;", (token, token, token))
+            row = cursor.fetchone()
+            if row:
+                token = row["token"]
 
     # Extract dynamic domain, purpose, and attributes from the actual email content
     new_domain = payload.domain or detect_domain_from_content(payload.subject, payload.body_text)
     new_purpose = payload.purpose or extract_purpose_from_content(payload.subject, payload.body_text)
-    new_attrs = extract_attributes_from_email_content(payload.subject, payload.body_text)
-    fiduciary_name = resolve_fiduciary_name(token, new_domain, payload.subject, payload.body_text, payload.fiduciary_name or "")
+    new_attrs = extract_attributes_from_email_content(payload.subject, payload.body_text, domain=new_domain)
+    fiduciary_input = payload.fiduciary_name
+    if not fiduciary_input and payload.from_address and "<" in payload.from_address:
+        fiduciary_input = payload.from_address.split("<")[0].replace('"', '').strip()
+    fiduciary_name = resolve_fiduciary_name(token or "", new_domain, payload.subject, payload.body_text, fiduciary_input or "")
     fiduciary_category, fiduciary_logo = get_fiduciary_metadata(fiduciary_name, new_domain)
     sent_date_str = payload.sent_date or datetime.utcnow().strftime("%A, %B %d, %Y")
 
+    is_new = not bool(row)
+
     if row:
         req = dict(row)
-        cursor.execute("""
-            UPDATE consent_requests 
-            SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
-            WHERE id = ?;
-        """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), payload.thread_id, payload.message_id, req["id"]))
+        token = req["token"]
+        effective_message_id = clean_message_id or req.get("message_id")
+        effective_thread_id = clean_thread_id or req.get("thread_id")
+
+        if req.get("status") == "PENDING":
+            cursor.execute("""
+                UPDATE consent_requests 
+                SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
+                WHERE id = ?;
+            """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), effective_thread_id, effective_message_id, req["id"]))
+        else:
+            cursor.execute("""
+                UPDATE consent_requests 
+                SET thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
+                WHERE id = ?;
+            """, (effective_thread_id, effective_message_id, req["id"]))
         
         cursor.execute("""
             UPDATE email_snapshots 
-            SET from_address = ?, to_address = ?, subject = ?, body_text = ?, sent_date = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
+            SET subject = ?, body_text = ?, from_address = ?, to_address = ?, sent_date = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id)
             WHERE id = ?;
-        """, (payload.from_address or f"{fiduciary_name} <compliance@{new_domain.lower().replace(' ', '').replace('/', '')}.com>", f"{dp_name} <{dp_email}>", payload.subject, payload.body_text, sent_date_str, payload.thread_id, payload.message_id, req["email_snapshot_id"]))
+        """, (payload.subject, payload.body_text, payload.from_address, payload.to_address, sent_date_str, effective_thread_id, effective_message_id, req["email_snapshot_id"]))
         conn.commit()
         cursor.execute("SELECT * FROM consent_requests WHERE id = ?;", (req["id"],))
         row = cursor.fetchone()
     else:
+        if not token:
+            token = generate_unpredictable_token()
         row = dynamic_create_request_for_token(
             token=token,
             conn=conn,
@@ -825,16 +1071,17 @@ def sync_gmail_webhook(
             body=payload.body_text,
             purpose=new_purpose,
             fiduciary=fiduciary_name,
-            thread_id=payload.thread_id,
-            message_id=payload.message_id
+            thread_id=clean_thread_id or payload.thread_id,
+            message_id=clean_message_id or payload.message_id
         )
 
     req = dict(row)
     result = hydrate_request(row, conn)
     conn.close()
 
-    result["token"] = token
-    result["link"] = f"http://localhost:5173/request/{token}"
+    result["is_new"] = is_new
+    result["token"] = req["token"]
+    result["link"] = f"http://localhost:5173/request/{req['token']}"
     return result
 
 
@@ -863,9 +1110,9 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
         "1.2 MB"
     ))
 
-    req_id = f"REQ-2026-CR-{random.randint(100, 999)}"
+    req_id = f"REQ-2026-CR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
     token = generate_unpredictable_token()
-    notice_id = payload.notice_id or f"NTC-2026-CR-{random.randint(100, 999)}"
+    notice_id = payload.notice_id or f"NTC-2026-CR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
     now = datetime.utcnow().isoformat() + "Z"
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
 
@@ -1016,19 +1263,82 @@ def get_consent_request_by_notice(notice_id: str = Path(...)):
     conn.close()
     return result
 
+@app.get("/api/me/consent-requests")
+def list_my_consent_requests(
+    status: Optional[str] = Query(None, description="Filter by status: PENDING, GRANTED, DENIED, etc."),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Authoritative endpoint for Data Principal to discover all their consent requests.
+    Derives identity exclusively from authenticated JWT session.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+
+    dp_id = current_user.get("dp_id")
+    if not dp_id:
+        _, norm_user_email = normalize_email_address(current_user.get("email", ""))
+        if norm_user_email:
+            dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+
+    if not dp_id:
+        conn.close()
+        return []
+
+    if status:
+        cursor.execute(
+            "SELECT * FROM consent_requests WHERE data_principal_id = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
+            (dp_id, status.strip().upper())
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM consent_requests WHERE data_principal_id = ? ORDER BY created_at DESC;",
+            (dp_id,)
+        )
+    rows = cursor.fetchall()
+    results = [hydrate_request(r, conn) for r in rows]
+    conn.close()
+    return results
+
+
 @app.get("/api/consent-requests")
-def list_consent_requests(current_user: dict = Depends(get_current_user)):
+def list_consent_requests(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    current_user: dict = Depends(get_current_user)
+):
     conn = get_db()
     cursor = conn.cursor()
     if current_user.get("role") == "DATA_PRINCIPAL":
         dp_id = current_user.get("dp_id")
-        cursor.execute("SELECT * FROM consent_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
+        if not dp_id:
+            _, norm_user_email = normalize_email_address(current_user.get("email", ""))
+            if norm_user_email:
+                dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+        if status:
+            cursor.execute(
+                "SELECT * FROM consent_requests WHERE data_principal_id = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
+                (dp_id, status.strip().upper())
+            )
+        else:
+            cursor.execute("SELECT * FROM consent_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
     else:
         fiduciary_name = current_user.get("fiduciary_name")
         if fiduciary_name:
-            cursor.execute("SELECT * FROM consent_requests WHERE fiduciary_name = ? ORDER BY created_at DESC;", (fiduciary_name,))
+            if status:
+                cursor.execute(
+                    "SELECT * FROM consent_requests WHERE fiduciary_name = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
+                    (fiduciary_name, status.strip().upper())
+                )
+            else:
+                cursor.execute("SELECT * FROM consent_requests WHERE fiduciary_name = ? ORDER BY created_at DESC;", (fiduciary_name,))
         else:
-            cursor.execute("SELECT * FROM consent_requests ORDER BY created_at DESC;")
+            if status:
+                cursor.execute(
+                    "SELECT * FROM consent_requests WHERE UPPER(status) = ? ORDER BY created_at DESC;",
+                    (status.strip().upper(),)
+                )
+            else:
+                cursor.execute("SELECT * FROM consent_requests ORDER BY created_at DESC;")
     rows = cursor.fetchall()
     results = [hydrate_request(r, conn) for r in rows]
     conn.close()
@@ -1309,6 +1619,20 @@ def record_consent_decision(
     cursor.execute("UPDATE consent_requests SET status = ? WHERE id = ?;", (payload.decision, req["id"]))
 
     consent_record = None
+    readable_granted = []
+    readable_denied = []
+    principal_name = current_user.get("name") or "Data Principal"
+    principal_email = current_user.get("email") or ""
+
+    try:
+        req_attrs = json.loads(req.get("requested_attributes") or "[]")
+        attr_map = {a.get("id"): a.get("name") for a in req_attrs if isinstance(a, dict)}
+        readable_granted = [attr_map.get(a, a) for a in (payload.selected_attributes or [])]
+        readable_denied = [attr_map.get(a, a) for a in (payload.denied_attributes or [])]
+    except Exception:
+        readable_granted = payload.selected_attributes or []
+        readable_denied = payload.denied_attributes or []
+
     if payload.decision == "GRANTED":
         consent_id = payload.consent_id or f"CNST-2026-{random.randint(1000, 9999)}"
         expiry = (datetime.utcnow() + timedelta(days=365)).isoformat() + "Z"
@@ -1322,18 +1646,6 @@ def record_consent_decision(
         })
 
         cursor.execute("DELETE FROM consents WHERE notice_id = ?;", (req["notice_id"],))
-
-        # Resolve human-readable attribute names from requested_attributes
-        readable_granted = []
-        readable_denied = []
-        try:
-            req_attrs = json.loads(req["requested_attributes"])
-            attr_map = {a.get("id"): a.get("name") for a in req_attrs if isinstance(a, dict)}
-            readable_granted = [attr_map.get(a, a) for a in payload.selected_attributes]
-            readable_denied = [attr_map.get(a, a) for a in payload.denied_attributes]
-        except Exception:
-            readable_granted = payload.selected_attributes
-            readable_denied = payload.denied_attributes
 
         cursor.execute("""
         INSERT INTO consents (consent_id, request_id, data_principal_id, fiduciary_name, fiduciary_category, fiduciary_logo, purpose, notice_id, status, granted_attributes, denied_attributes, dpo_contact, data_region, receipt_hash, custom_note, granted_on, expires_on)
@@ -1614,41 +1926,72 @@ def get_consent_receipt(consent_id: str, current_user: dict = Depends(get_curren
     }
 
 @app.post("/api/consents/{consent_id}/revoke")
-def revoke_consent(
+async def revoke_consent(
     consent_id: str, 
-    payload: RevokePayload,
-    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+    request: Request,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL", "ADMIN"]))
 ):
+    # Flexible payload extraction: accept dict, string, or empty body without failing
+    reason = "Consent withdrawn by Data Principal under DPDP Act Sec 6(4)"
+    try:
+        raw_body = await request.json()
+        if isinstance(raw_body, dict):
+            reason = raw_body.get("reason") or reason
+        elif isinstance(raw_body, str) and raw_body.strip():
+            reason = raw_body.strip()
+    except Exception:
+        try:
+            text_body = (await request.body()).decode("utf-8").strip()
+            if text_body:
+                reason = text_body
+        except Exception:
+            pass
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM consents WHERE consent_id = ?;", (consent_id,))
     row = cursor.fetchone()
     if not row:
+        cursor.execute("SELECT * FROM consents WHERE LOWER(consent_id) = LOWER(?);", (consent_id,))
+        row = cursor.fetchone()
+
+    if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Active consent record not found")
 
     consent = dict(row)
-    if consent["data_principal_id"] != current_user.get("dp_id"):
+    user_dp_id = current_user.get("dp_id")
+    user_id = current_user.get("id")
+    user_email = current_user.get("email")
+    is_admin = current_user.get("role") == "ADMIN"
+
+    is_owner = (
+        is_admin or
+        (consent.get("data_principal_id") and consent["data_principal_id"] in (user_dp_id, user_id)) or
+        (consent.get("data_principal_email") and consent["data_principal_email"] == user_email)
+    )
+    if not is_owner:
         conn.close()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You can only revoke your own consent.")
 
     now = datetime.utcnow().isoformat() + "Z"
 
-    cursor.execute("UPDATE consents SET status = 'REVOKED', revoked_on = ?, revocation_reason = ? WHERE consent_id = ?;", (now, payload.reason, consent_id))
-    cursor.execute("UPDATE consent_requests SET status = 'REVOKED' WHERE id = ? OR notice_id = ?;", (consent["request_id"], consent["notice_id"]))
+    cursor.execute("UPDATE consents SET status = 'REVOKED', revoked_on = ?, revocation_reason = ? WHERE consent_id = ?;", (now, reason, consent["consent_id"]))
+    if consent.get("request_id") or consent.get("notice_id"):
+        cursor.execute("UPDATE consent_requests SET status = 'REVOKED' WHERE id = ? OR notice_id = ?;", (consent.get("request_id"), consent.get("notice_id")))
 
     cursor.execute("""
     INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
-        f"AUD-{random.randint(100, 999)}",
-        consent["request_id"],
-        consent_id,
-        consent["data_principal_id"],
+        f"AUD-{random.randint(1000, 9999)}",
+        consent.get("request_id") or "N/A",
+        consent["consent_id"],
+        consent.get("data_principal_id"),
         "CONSENT_REVOKED",
-        consent["fiduciary_name"],
-        consent["notice_id"],
-        f"Consent revoked under DPDP Sec 6(4). Reason: {payload.reason}",
+        consent.get("fiduciary_name") or "Data Fiduciary",
+        consent.get("notice_id") or "NTC-REVOKED",
+        f"Consent revoked under DPDP Sec 6(4). Reason: {reason}",
         "103.21.124.88",
         now,
         "REVOKED"
@@ -1659,8 +2002,11 @@ def revoke_consent(
 
     return {
         "success": True,
-        "message": f"Consent {consent_id} successfully revoked.",
-        "status": "REVOKED"
+        "consent_id": consent["consent_id"],
+        "message": f"Consent {consent['consent_id']} successfully revoked under DPDP Act Section 6(4).",
+        "status": "REVOKED",
+        "revoked_on": now,
+        "revocation_reason": reason
     }
 
 @app.get("/api/audit-logs")

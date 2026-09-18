@@ -31,12 +31,21 @@ def post_email_to_consent_manager(from_address, to_address, subject, body_text, 
         with urllib.request.urlopen(req) as response:
             res_body = response.read().decode('utf-8')
             res_json = json.loads(res_body)
+            if res_json.get("ignored"):
+                print("====================================================")
+                print("[IGNORED] Email rejected by Consent Intent Detector!")
+                print(f"Classification: {res_json.get('classification', res_json.get('reason'))}")
+                print(f"Score: {res_json.get('intent_score', 'N/A')}")
+                print(f"Reasons: {res_json.get('intent_reasons', res_json.get('detail'))}")
+                print("====================================================")
+                return res_json
             print("====================================================")
             print("[SUCCESS] Email Ingested Cleanly to Consent Manager DB!")
             print(f"Token: {res_json.get('token')}")
             print(f"Recipient: {res_json.get('dataPrincipal', {}).get('email')}")
             print(f"Subject: {res_json.get('emailSubject')}")
             print(f"Consent Link: {res_json.get('link')}")
+            print(f"Intent Score: {res_json.get('intent_score')} ({res_json.get('intent_classification')})")
             print("====================================================")
             return res_json
     except Exception as e:

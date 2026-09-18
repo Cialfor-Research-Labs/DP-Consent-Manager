@@ -1,13 +1,65 @@
+import os
 import re
 import json
+import hmac
 import random
+import logging
+import mimetypes
+import threading
+import urllib.request
 import uvicorn
 from typing import Optional
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Query, Path
+from dotenv import load_dotenv
+load_dotenv()
+from fastapi import FastAPI, HTTPException, Query, Path, Depends, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from database import get_db, init_db, generate_sha256_signature, generate_data_principal_id, generate_unpredictable_token
-from models import DecisionPayload, RevokePayload, DSRRequestPayload, ConsentRequestCreatePayload, EmailIngestPayload, GrievancePayload, NomineePayload
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
+
+logger = logging.getLogger(__name__)
+
+from consent_intent_detector import (
+    detect_consent_intent,
+    CONSENT_REQUEST,
+    NOT_CONSENT,
+    AMBIGUOUS
+)
+from database import (
+    get_db, 
+    init_db, 
+    generate_sha256_signature, 
+    generate_data_principal_id, 
+    generate_unpredictable_token,
+    get_user_by_email,
+    get_user_by_id,
+    create_user_account,
+    link_or_create_data_principal,
+    normalize_email_address
+)
+from auth import (
+    hash_password,
+    verify_password,
+    validate_password_strength,
+    create_access_token,
+    get_current_user,
+    get_optional_user,
+    require_role
+)
+from models import (
+    DecisionPayload, 
+    RevokePayload, 
+    DSRRequestPayload, 
+    ConsentRequestCreatePayload, 
+    EmailIngestPayload, 
+    GrievancePayload, 
+    NomineePayload,
+    UserRegisterPayload,
+    AdminUserProvisionPayload,
+    UserLoginPayload,
+    AuthResponse,
+    UserOut
+)
 
 # Initialize database tables and seed records
 init_db()
@@ -18,14 +70,62 @@ app = FastAPI(
     version="1.5.0"
 )
 
-# Enable CORS for frontend integration
+# CORS configuration supporting frontend integration with credentials
+cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000"
+]
+env_origins = os.getenv("ALLOWED_ORIGINS", "")
+if env_origins:
+    for o in env_origins.split(","):
+        clean_o = o.strip()
+        if clean_o and clean_o not in cors_origins:
+            cors_origins.append(clean_o)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:[0-9]+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── SINGLE-PORT ASSETS CONFIGURATION ─────────────────────────────────────────
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+
+DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
+ASSETS_DIR = os.path.join(DIST_DIR, "assets")
+
+if os.path.isdir(ASSETS_DIR):
+    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+# ── ADMIN / DEBUG FIELD GUARD ─────────────────────────────────────────────────
+# Fields that are backend/admin-debug only and must NEVER be returned to
+# Data Principal or Data Fiduciary-facing API responses.
+_ADMIN_ONLY_FIELDS = frozenset({
+    "intent_score", "intentScore",
+    "intent_classification", "intentClassification",
+    "intent_reasons", "intentReasons",
+})
+
+
+def strip_admin_fields(response):
+    """Remove internal intent metadata, including nested snapshots and attributes."""
+    if isinstance(response, dict):
+        for field in _ADMIN_ONLY_FIELDS:
+            response.pop(field, None)
+        for value in response.values():
+            strip_admin_fields(value)
+    elif isinstance(response, list):
+        for value in response:
+            strip_admin_fields(value)
+    return response
+
 
 def hydrate_request(req_row, conn):
     req = dict(req_row)
@@ -84,7 +184,9 @@ def hydrate_request(req_row, conn):
     req["threadId"] = req.get("thread_id") or req["emailSnapshot"].get("threadId", "")
     req["messageId"] = req.get("message_id") or req["emailSnapshot"].get("messageId", "")
 
-    return req
+    # Keep database metadata internal by default. Only the protected Gmail
+    # webhook explicitly adds intent debugging metadata to its response.
+    return strip_admin_fields(req)
 
 def check_request_expiry(req, conn):
     if not req.get("expires_at"):
@@ -125,30 +227,100 @@ def check_request_expiry(req, conn):
 #   3. Which personal data attributes are being requested
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _has_kw(text: str, keywords: list) -> bool:
+    """Check if any keyword or phrase exists in text with word boundaries."""
+    for kw in keywords:
+        pattern = r'\b' + re.escape(kw.lower()).replace(r'\ ', r'\s+') + r'\b'
+        if re.search(pattern, text):
+            return True
+    return False
+
+
 def detect_domain_from_content(subject: str, body: str) -> str:
-    """Detect the business domain/sector from actual email subject + body text."""
+    """
+    Detect the business domain/sector from actual email subject + body text.
+    Uses strict word boundaries to eliminate false-positive substring collisions
+    (such as 'emi' matching inside 'academic').
+    """
     text = (subject + " " + body).lower()
-    if any(kw in text for kw in ["hospital", "medical", "health insurance", "diagnosis", "prescription", "lab report", "clinic", "doctor", "patient", "treatment", "mediclam"]):
-        return "Healthcare"
-    if any(kw in text for kw in ["loan", "cibil", "lending", "credit line", "emi", "fintech", "nbfc", "credit score", "borrower", "disburse"]):
-        return "FinTech"
-    if any(kw in text for kw in ["uan", "provident fund", "epfo", "pf account", "payroll", "esic", "gratuity", "employee provident"]):
-        return "EPFO / Payroll"
-    if any(kw in text for kw in ["savings account", "fixed deposit", "neft", "rtgs", "rbi guideline", "banking", "demat", "current account"]):
-        return "Banking"
-    if any(kw in text for kw in ["background verification", "bgv", "degree verification", "employment onboarding", "hr department", "hiring", "experience letter", "relieving letter"]):
-        return "Corporate HR"
-    if any(kw in text for kw in ["order", "shipping", "delivery address", "ecommerce", "checkout", "cart", "retail"]):
-        return "E-Commerce"
-    if any(kw in text for kw in ["insurance policy", "premium", "tpa", "claim settlement", "insurance coverage"]):
-        return "Insurance"
-    if any(kw in text for kw in ["school", "college", "university", "student", "admission", "education loan", "scholarship"]):
+
+    # 1. Education & Academic Services (Prioritized: university, institute, academic records)
+    education_keywords = [
+        "education", "educational", "institute", "institution", "university",
+        "college", "student", "academic", "enrollment", "enrolment",
+        "examination", "exam result", "certificate", "scholarship",
+        "placement", "school", "admission", "degree", "marksheet",
+        "transcript", "alumni", "campus", "tuition", "curriculum", "faculty",
+        "semester", "coursework"
+    ]
+    if _has_kw(text, education_keywords):
         return "Education"
-    if any(kw in text for kw in ["gst", "income tax", "government scheme", "ministry", "ration card", "voter id"]):
-        return "Government"
-    if any(kw in text for kw in ["bank", "account", "kyc", "ifsc"]):
+
+    # 2. Healthcare & Diagnostic Services
+    healthcare_keywords = [
+        "hospital", "medical", "health insurance", "diagnosis", "prescription",
+        "lab report", "clinic", "doctor", "patient", "treatment", "mediclaim",
+        "healthcare", "pathology", "diagnostic", "radiology"
+    ]
+    if _has_kw(text, healthcare_keywords):
+        return "Healthcare"
+
+    # 3. EPFO / Statutory Payroll
+    payroll_keywords = [
+        "uan", "provident fund", "epfo", "pf account", "payroll", "esic",
+        "gratuity", "employee provident"
+    ]
+    if _has_kw(text, payroll_keywords):
+        return "EPFO / Payroll"
+
+    # 4. FinTech & Digital Lending (Word boundaries prevent 'emi' substring collisions)
+    fintech_keywords = [
+        "loan", "cibil", "lending", "credit line", "emi", "fintech",
+        "nbfc", "credit score", "borrower", "disburse", "instant credit"
+    ]
+    if _has_kw(text, fintech_keywords):
+        return "FinTech"
+
+    # 5. Banking & Financial Services
+    banking_keywords = [
+        "savings account", "fixed deposit", "neft", "rtgs", "rbi guideline",
+        "banking", "demat", "current account", "bank account", "ifsc"
+    ]
+    if _has_kw(text, banking_keywords):
         return "Banking"
-    return "Corporate / Enterprise"
+
+    # 6. Insurance & Coverage
+    insurance_keywords = [
+        "insurance policy", "premium", "tpa", "claim settlement", "insurance coverage"
+    ]
+    if _has_kw(text, insurance_keywords):
+        return "Insurance"
+
+    # 7. E-Commerce & Retail Logistics
+    ecom_keywords = [
+        "order", "shipping", "delivery address", "ecommerce", "e-commerce",
+        "checkout", "cart", "retail"
+    ]
+    if _has_kw(text, ecom_keywords):
+        return "E-Commerce"
+
+    # 8. Corporate HR & Employment Onboarding
+    hr_keywords = [
+        "background verification", "bgv", "degree verification", "employment onboarding",
+        "hr department", "hiring", "experience letter", "relieving letter"
+    ]
+    if _has_kw(text, hr_keywords):
+        return "Corporate HR"
+
+    # 9. Government & Public Administration
+    govt_keywords = [
+        "gst", "income tax", "government scheme", "ministry", "ration card", "voter id"
+    ]
+    if _has_kw(text, govt_keywords):
+        return "Government"
+
+    # 10. Neutral General Fallback (Requirement 5: Never FinTech)
+    return "General"
 
 
 def extract_purpose_from_content(subject: str, body: str) -> str:
@@ -172,95 +344,132 @@ def extract_purpose_from_content(subject: str, body: str) -> str:
 def resolve_fiduciary_name(token: str = "", domain: str = "", subject: str = "", body: str = "", fiduciary: str = "") -> str:
     """
     Resolve institutional Data Fiduciary entity name under DPDP Act.
-    If the link/token or content is for a Bank (e.g. tok_bank_kyc, 'bank' in token, or domain is Banking),
-    it MUST show the Bank name (e.g. ABC National Bank, or named bank in text).
-    It will never use a personal individual's name as the Data Fiduciary.
+    Ensures institutional name is returned instead of personal names.
     """
     token_lower = (token or "").lower()
-    text = f"{subject} {body}".lower()
+    full_text = f"{subject} {body}"
+    text_lower = full_text.lower()
     fiduciary_clean = (fiduciary or "").strip()
 
-    # If an institutional organization was explicitly provided (and is not an individual person or email)
+    # 1. Education institution detection from content takes precedence
+    if domain == "Education" or "edu" in token_lower or _has_kw(text_lower, ["university", "college", "institute", "school", "academy"]):
+        inst_match = re.search(r'([A-Z][A-Za-z0-9\s&]+(?:Institute of Technology|Institute|University|College|Academy|School))', full_text)
+        if inst_match:
+            candidate = inst_match.group(1).strip()
+            if len(candidate) > 4:
+                return candidate
+        if not fiduciary_clean or any(p in fiduciary_clean.lower() for p in ["prerna", "pandey", "manu", "sharma", "@", "unknown", "data fiduciary", "test", "student"]):
+            return "ABC Institute of Technology"
+
+    # 2. If an institutional organization was explicitly provided (and is not an individual person or email)
     is_personal_name = any(p in fiduciary_clean.lower() for p in [
-        "prerna", "pandey", "@", "unknown", "data fiduciary", "test"
+        "prerna", "pandey", "manu", "sharma", "@", "unknown", "data fiduciary", "test", "admin", "user", "student"
     ])
     if fiduciary_clean and not is_personal_name and len(fiduciary_clean) > 2:
         return fiduciary_clean
 
     # Detect specific real banks if mentioned in text
-    if any(kw in text for kw in ["hdfc bank", "hdfc"]):
+    if any(kw in text_lower for kw in ["hdfc bank", "hdfc"]):
         return "HDFC Bank"
-    if any(kw in text for kw in ["icici bank", "icici"]):
+    if any(kw in text_lower for kw in ["icici bank", "icici"]):
         return "ICICI Bank"
-    if any(kw in text for kw in ["state bank of india", "sbi"]):
+    if any(kw in text_lower for kw in ["state bank of india", "sbi"]):
         return "State Bank of India"
-    if any(kw in text for kw in ["axis bank", "axis"]):
+    if any(kw in text_lower for kw in ["axis bank", "axis"]):
         return "Axis Bank"
-    if any(kw in text for kw in ["kotak mahindra", "kotak bank", "kotak"]):
+    if any(kw in text_lower for kw in ["kotak mahindra", "kotak bank", "kotak"]):
         return "Kotak Mahindra Bank"
-    if any(kw in text for kw in ["punjab national bank", "pnb"]):
+    if any(kw in text_lower for kw in ["punjab national bank", "pnb"]):
         return "Punjab National Bank"
-    if any(kw in text for kw in ["bank of baroda", "bob"]):
+    if any(kw in text_lower for kw in ["bank of baroda", "bob"]):
         return "Bank of Baroda"
 
-    # Banking link / domain check — ALWAYS use Bank name for banking links
-    if "bank" in token_lower or domain == "Banking" or any(kw in text for kw in ["savings account", "current account", "fixed deposit", "kyc verification", "rbi guideline", "bank account", "ifsc"]):
+    # FinTech / Loan
+    if "fintech" in token_lower or "loan" in token_lower or "credit" in token_lower or domain == "FinTech" or _has_kw(text_lower, ["cibil", "lending", "credit score"]):
+        return "PayFlex Lending"
+
+    # Banking link / domain check
+    if "bank" in token_lower or domain == "Banking" or _has_kw(text_lower, ["savings account", "current account", "fixed deposit", "kyc verification", "rbi guideline", "bank account", "ifsc"]):
         return "ABC National Bank"
 
     # Healthcare
-    if "health" in token_lower or "med" in token_lower or domain == "Healthcare" or any(kw in text for kw in ["hospital", "clinic", "diagnosis", "mediclaim", "patient", "apollo"]):
+    if "health" in token_lower or "med" in token_lower or domain == "Healthcare" or _has_kw(text_lower, ["hospital", "clinic", "diagnosis", "mediclaim", "patient", "apollo"]):
         return "Apollo Care Hospital"
 
     # EPFO / PF
-    if "pf" in token_lower or "uan" in token_lower or "provident" in token_lower or domain == "EPFO / Payroll" or any(kw in text for kw in ["epfo", "provident fund", "uan"]):
+    if "pf" in token_lower or "uan" in token_lower or "provident" in token_lower or domain == "EPFO / Payroll" or _has_kw(text_lower, ["epfo", "provident fund", "uan"]):
         return "EPFO / Cialfor Payroll Cell"
-
-    # FinTech / Loan
-    if "fintech" in token_lower or "loan" in token_lower or "credit" in token_lower or domain == "FinTech" or any(kw in text for kw in ["cibil", "lending", "credit score"]):
-        return "PayFlex Lending"
 
     # E-Commerce
     if "ecom" in token_lower or "order" in token_lower or "retail" in token_lower or domain == "E-Commerce":
         return "ShopEase Retail"
 
     # Corporate HR / BGV
-    if "bgv" in token_lower or "corp" in token_lower or "hr" in token_lower or domain == "Corporate HR" or any(kw in text for kw in ["background verification", "onboarding"]):
+    if "bgv" in token_lower or "corp" in token_lower or "hr" in token_lower or domain == "Corporate HR" or _has_kw(text_lower, ["background verification", "onboarding"]):
         return "GlobalTech Solutions HR"
 
-    if domain and domain != "Corporate / Enterprise":
+    if domain and domain not in ["General", "Corporate / Enterprise", "Corporate/Enterprise"]:
         return f"{domain} Enterprise"
 
-    return "ABC National Bank" if "bank" in token_lower else "Corporate Fiduciary"
+    return "General Service Fiduciary"
 
 
 def get_fiduciary_metadata(fiduciary_name: str, domain: str):
     """Return category and emoji logo appropriate for the institutional fiduciary."""
     name_low = fiduciary_name.lower()
-    domain_low = domain.lower()
-    if "bank" in name_low or "banking" in domain_low:
-        return "Banking & Financial Services", "🏦"
-    if "hospital" in name_low or "health" in name_low or "care" in name_low or "healthcare" in domain_low:
+    domain_low = (domain or "").lower()
+
+    # Education (Prioritized for Academic Services)
+    if "education" in domain_low or "academic" in domain_low or any(k in name_low for k in ["university", "college", "institute", "school", "academy"]):
+        return "Education & Academic Services", "🎓"
+
+    # Healthcare
+    if "healthcare" in domain_low or "health" in domain_low or "hospital" in name_low or "care" in name_low:
         return "Healthcare & Diagnostic Services", "🏥"
+
+    # FinTech
+    if "fintech" in domain_low or "lending" in name_low or "fintech" in name_low or "payflex" in name_low:
+        return "FinTech & Digital Lending", "💳"
+
+    # Banking
+    if "banking" in domain_low or "bank" in name_low:
+        return "Banking & Financial Services", "🏦"
+
+    # EPFO / Payroll
     if "epfo" in name_low or "payroll" in domain_low or "pf" in name_low:
         return "Statutory & Government Payroll", "💼"
-    if "lending" in name_low or "fintech" in name_low or "fintech" in domain_low:
-        return "FinTech & Digital Lending", "💳"
+
+    # E-Commerce
     if "retail" in name_low or "shopease" in name_low or "commerce" in domain_low:
         return "E-Commerce & Retail Logistics", "🛒"
-    if "hr" in name_low or "globaltech" in name_low or "corporate" in domain_low:
+
+    # Corporate HR
+    if "hr" in name_low or "globaltech" in name_low or "corporate" in domain_low or "recruitment" in domain_low:
         return "Corporate HR & Recruitment", "🏢"
-    return f"{domain} Enterprise", "🏢"
+
+    # Government
+    if "government" in domain_low or "ministry" in name_low:
+        return "Government & Public Administration", "🏛️"
+
+    # Insurance
+    if "insurance" in domain_low or "insurance" in name_low:
+        return "Insurance & Risk Services", "🛡️"
+
+    # Requirement 5: Neutral General fallback (Never FinTech)
+    return "General Corporate Services", "🏢"
 
 
-
-def extract_attributes_from_email_content(subject: str, body: str) -> list:
+def extract_attributes_from_email_content(subject: str, body: str, domain: str = None) -> list:
     """
     Universal DPDP-compliant attribute extractor.
     Reads the actual email subject + body text and dynamically identifies
     which personal data attributes are being requested.
-    Completely replaces the old hardcoded domain-template logic.
+    Uses strict word boundaries and full education sector support.
     """
     text = (subject + " " + body).lower()
+    if not domain:
+        domain = detect_domain_from_content(subject, body)
+
     attrs = []
     added = set()
 
@@ -273,106 +482,126 @@ def extract_attributes_from_email_content(subject: str, body: str) -> list:
             attrs.append(a)
             added.add(attr_id)
 
-    # ── ALWAYS REQUIRED: Full Name ─────────────────────────────────────────────
-    add("attr_name", "Full Name & Official Identity", "IDENTITY", True,
-        "Official name of the Data Principal for identification and records", False)
+    # 1. Full Name (Always required)
+    add("attr_name", "Full Name", "IDENTITY", True,
+        "Official legal name of the Data Principal for verification and records", False)
 
-    # ── PAN CARD ──────────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["pan", "pan card", "permanent account number", "tax deduction", "form 60"]):
+    # 2. Date of Birth
+    if _has_kw(text, ["date of birth", "dob", "birth date", "birthdate", "age proof"]) or domain == "Education":
+        add("attr_dob", "Date of Birth", "IDENTITY", True,
+            "Date of birth for age verification and statutory record-keeping", False)
+
+    # 3. Mobile Number
+    if _has_kw(text, ["phone", "mobile", "contact number", "cell", "telephone", "otp", "sms"]) or domain == "Education":
+        add("attr_phone", "Mobile Number", "CONTACT", True,
+            "Contact mobile number for communications, alerts, and 2FA", False)
+
+    # 4. Email Address
+    if _has_kw(text, ["email", "e-mail", "email address", "email id"]) or domain == "Education":
+        add("attr_email_id", "Email Address", "CONTACT", True,
+            "Official email address for correspondence and notices", False)
+
+    # 5. Residential Address
+    if _has_kw(text, ["address", "residential address", "home address", "permanent address", "delivery address", "shipping address", "pincode", "location proof"]) or domain == "Education":
+        add("attr_address", "Residential Address", "CONTACT", True,
+            "Permanent and residential address for correspondence and KYC", False)
+
+    # 6. Enrollment Number (Education specific)
+    if _has_kw(text, ["enrollment", "enrolment", "enrollment number", "enrolment number", "roll number", "roll no", "registration number", "student id", "matriculation", "hall ticket"]) or domain == "Education":
+        add("attr_enrollment", "Enrollment Number", "ACADEMIC", True,
+            "Unique student enrollment / registration identifier assigned by the institution", False)
+
+    # 7. Academic Records (Education specific)
+    if _has_kw(text, ["academic record", "academic records", "academic information", "transcript", "credit", "marksheet", "degree", "diploma", "gpa", "coursework", "qualification"]) or domain == "Education":
+        add("attr_academic_records", "Academic Records", "ACADEMIC", True,
+            "Transcripts, course credits, marksheet copies, and academic progress records", False)
+
+    # 8. Examination Results (Education specific)
+    if _has_kw(text, ["examination", "examination result", "examination results", "exam result", "exam results", "scorecard", "semester result", "evaluation", "grades", "board exam"]) or domain == "Education":
+        add("attr_exam_results", "Examination Results", "ACADEMIC", True,
+            "Semester examination scorecards, evaluation results, and official grade sheets", False)
+
+    # 9. Identity Proof (Education / General KYC)
+    if _has_kw(text, ["identity proof", "id proof", "govt id", "identity document", "aadhaar", "aadhar", "passport", "voter id", "driving license", "photo id", "government photo id"]) or domain == "Education":
+        add("attr_identity_proof", "Identity Proof", "IDENTITY", True,
+            "Official government-issued identity proof document for authentication", True)
+
+    # 10. Placement Profile Details (Education specific)
+    if _has_kw(text, ["placement", "placement profile", "placement profile details", "campus placement", "career portfolio", "resume", "cv", "internship", "job profile"]) or domain == "Education":
+        add("attr_placement", "Placement Profile Details", "PROFESSIONAL", False,
+            "Career portfolio, placement preferences, resume, and recruiter profile details", False, default_granted=True)
+
+    # 11. Scholarship Details (Education specific)
+    if _has_kw(text, ["scholarship", "financial aid", "stipend", "grant", "fellowship"]):
+        add("attr_scholarship", "Scholarship & Financial Aid Records", "ACADEMIC", False,
+            "Scholarship eligibility, disbursement records, and grant documentation", False, default_granted=True)
+
+    # 12. PAN Card (Financial)
+    if _has_kw(text, ["pan", "pan card", "permanent account number", "tax deduction", "form 60"]):
         add("attr_pan", "Permanent Account Number (PAN Card)", "FINANCIAL", True,
             "Government-issued tax identity document for financial compliance", True)
 
-    # ── AADHAAR / KYC ─────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["aadhaar", "aadhar", "uid number", "biometric", "e-kyc", "ekyc", "kyc", "uidai"]):
-        add("attr_aadhaar", "Aadhaar / Government KYC Document", "IDENTITY", True,
-            "UIDAI Aadhaar for mandatory KYC verification and identity proof", True)
-
-    # ── BANK ACCOUNT ──────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["bank account", "account number", "ifsc", "savings account", "current account", "neft", "rtgs", "upi id", "bank details"]):
+    # 13. Bank Account (Financial)
+    if _has_kw(text, ["bank account", "account number", "ifsc", "savings account", "current account", "neft", "rtgs", "upi id", "bank details"]):
         add("attr_bank", "Bank Account Number & IFSC Code", "FINANCIAL", True,
             "Bank account details for payment processing and fund transfer", True)
 
-    # ── BANK STATEMENT ────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["bank statement", "account statement", "6 month", "6-month", "bank passbook"]):
+    # 14. Bank Statement (Financial)
+    if _has_kw(text, ["bank statement", "account statement", "6 month", "6-month", "bank passbook"]):
         add("attr_bank_stmt", "Bank Account Statement (6 Months)", "FINANCIAL", True,
             "Recent bank statement for income and transaction verification", True)
 
-    # ── CIBIL / CREDIT SCORE ──────────────────────────────────────────────────
-    if any(kw in text for kw in ["cibil", "credit score", "credit report", "experian", "equifax", "crif", "credit bureau"]):
+    # 15. CIBIL / Credit Score (Financial)
+    if _has_kw(text, ["cibil", "credit score", "credit report", "experian", "equifax", "crif", "credit bureau"]):
         add("attr_cibil", "Credit Score Report (CIBIL / Experian)", "FINANCIAL", True,
             "Credit bureau score report for loan/credit eligibility assessment", True)
 
-    # ── UAN / PF / EPFO ───────────────────────────────────────────────────────
-    if any(kw in text for kw in ["uan", "universal account number", "provident fund", "pf account", "epfo", "employee provident"]):
+    # 16. UAN / PF / EPFO (Payroll)
+    if _has_kw(text, ["uan", "universal account number", "provident fund", "pf account", "epfo", "employee provident"]):
         add("attr_uan", "Universal Account Number (UAN) & PF ID", "FINANCIAL", True,
             "EPFO UAN for Provident Fund account linking and management", True)
 
-    # ── MEDICAL / HEALTH ──────────────────────────────────────────────────────
-    if any(kw in text for kw in ["medical record", "health record", "diagnostic", "lab report", "prescription", "treatment history", "patient record"]):
+    # 17. Medical / Health (Healthcare)
+    if _has_kw(text, ["medical record", "health record", "diagnostic", "lab report", "prescription", "treatment history", "patient record"]):
         add("attr_medical", "Medical Records & Diagnostic History", "HEALTH", True,
             "Medical records required for healthcare service and insurance processing", True)
 
-    # ── HEALTH INSURANCE ──────────────────────────────────────────────────────
-    if any(kw in text for kw in ["health insurance", "insurance policy", "tpa", "cashless", "mediclaim", "policy number"]):
+    # 18. Health Insurance (Healthcare)
+    if _has_kw(text, ["health insurance", "insurance policy", "tpa", "cashless", "mediclaim", "policy number"]):
         add("attr_insurance", "Health Insurance Policy Number", "HEALTH", True,
             "Insurance policy details for cashless treatment and claim processing", True)
 
-    # ── ADDRESS ───────────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["address", "residential address", "home address", "delivery address", "shipping address", "pincode", "location proof"]):
-        add("attr_address", "Residential Address & Address Proof", "CONTACT", True,
-            "Home address for correspondence, KYC, and service delivery", False)
-
-    # ── PHONE NUMBER ──────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["phone", "mobile", "contact number", "telephone", "otp", "sms notification"]):
-        add("attr_phone", "Mobile Phone Number", "CONTACT", True,
-            "Contact number for OTP verification and communication", False)
-
-    # ── EMAIL ADDRESS ─────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["email address", "email id", "e-mail id"]):
-        add("attr_email_id", "Email Address", "CONTACT", True,
-            "Email for digital correspondence and account notifications", False)
-
-    # ── GOVERNMENT PHOTO ID ───────────────────────────────────────────────────
-    if any(kw in text for kw in ["passport", "voter id", "driving license", "government photo id", "photo id proof"]):
-        add("attr_govt_id", "Government Photo ID (Passport / Voter ID / DL)", "IDENTITY", True,
-            "Official government-issued photo identity document", True)
-
-    # ── EMPLOYMENT / BGV ──────────────────────────────────────────────────────
-    if any(kw in text for kw in ["background verification", "bgv", "criminal check", "police verification", "employment verification"]):
+    # 19. Background Verification (Corporate HR)
+    if _has_kw(text, ["background verification", "bgv", "criminal check", "police verification", "employment verification"]):
         add("attr_bgv", "Background Verification & Criminal Record Check", "LEGAL/VERIFICATION", True,
             "Third-party background check for employment onboarding clearance", True)
 
-    # ── DEGREE / EDUCATION ────────────────────────────────────────────────────
-    if any(kw in text for kw in ["degree", "marksheet", "academic certificate", "university registrar", "diploma"]):
-        add("attr_degree", "Educational Degree Certificates & Marksheets", "PROFESSIONAL", True,
-            "Academic qualification documents for credential verification", True)
-
-    # ── EXPERIENCE LETTER ─────────────────────────────────────────────────────
-    if any(kw in text for kw in ["experience letter", "relieving letter", "reference check", "prior employment", "work history"]):
+    # 20. Prior Employment & Experience (Corporate HR)
+    if _has_kw(text, ["experience letter", "relieving letter", "reference check", "prior employment", "work history"]):
         add("attr_prior_emp", "Prior Employment & Experience Records", "PROFESSIONAL", False,
             "Relieving letter and employment reference for background check", False, default_granted=True)
 
-    # ── INCOME / SALARY ───────────────────────────────────────────────────────
-    if any(kw in text for kw in ["salary slip", "income proof", "salary statement", "ctc", "annual income", "itr", "form 16"]):
+    # 21. Income Proof (Financial)
+    if _has_kw(text, ["salary slip", "income proof", "salary statement", "ctc", "annual income", "itr", "form 16"]):
         add("attr_income", "Income Proof & Salary Records", "FINANCIAL", False,
             "Income documentation for financial eligibility and tax verification", True, default_granted=True)
 
-    # ── PAYMENT CARD ──────────────────────────────────────────────────────────
-    if any(kw in text for kw in ["credit card", "debit card", "card details", "payment method", "express checkout", "tokenized card"]):
+    # 22. Payment Card (Financial)
+    if _has_kw(text, ["credit card", "debit card", "card details", "payment method", "express checkout", "tokenized card"]):
         add("attr_card", "Tokenized Payment Card Details", "FINANCIAL", False,
             "RBI-compliant tokenized card data for express payment checkout", True, default_granted=False)
 
-    # ── DEVICE / LOCATION ─────────────────────────────────────────────────────
-    if any(kw in text for kw in ["device", "location data", "gps", "ip address", "device fingerprint", "anti-fraud"]):
+    # 23. Device & Location
+    if _has_kw(text, ["device", "location data", "gps", "ip address", "device fingerprint", "anti-fraud"]):
         add("attr_device", "Device & Location Data", "DIGITAL", False,
             "Device fingerprint and location for fraud prevention and security", True, default_granted=True)
 
-    # ── SUPPORTING DOCUMENTS ──────────────────────────────────────────────────
-    if any(kw in text for kw in ["supporting document", "records required", "proof required", "file upload", "attach document"]):
+    # 24. Supporting Documents
+    if _has_kw(text, ["supporting document", "records required", "proof required", "file upload", "attach document"]):
         add("attr_docs", "Supporting Documents & Records", "LEGAL/VERIFICATION", False,
             "Relevant supporting documents for requested service delivery", True, default_granted=True)
 
-    # ── FALLBACK: generic fields if nothing specific found ────────────────────
+    # Fallback if sparse
     if len(attrs) <= 1:
         add("attr_email_id", "Email Address", "CONTACT", True,
             "Contact email for correspondence and account management", False)
@@ -394,20 +623,23 @@ def dynamic_create_request_for_token(
     purpose: str = None,
     fiduciary: str = None,
     thread_id: str = None,
-    message_id: str = None
+    message_id: str = None,
+    intent_score: int = None,
+    intent_classification: str = None,
+    intent_reasons: str = None
 ):
     cursor = conn.cursor()
-    dp_name = to_name or "Prerna Pandey"
-    dp_email = to_email or "pandeyprerna1407@gmail.com"
-    dp_id = generate_data_principal_id(dp_email)
+    clean_msg_id = (message_id or "").strip()
+    if clean_msg_id:
+        cursor.execute("SELECT * FROM consent_requests WHERE message_id = ? ORDER BY created_at ASC LIMIT 1;", (clean_msg_id,))
+        existing = cursor.fetchone()
+        if existing:
+            return existing
 
-    # 1. Create/Ensure DataPrincipal
-    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-    if not cursor.fetchone():
-        cursor.execute("""
-        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (dp_id, dp_name, dp_email, "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", datetime.utcnow().isoformat() + "Z"))
+    parsed_name, norm_email = normalize_email_address(to_email or "pandeyprerna1407@gmail.com")
+    dp_name = to_name or parsed_name or "Data Principal"
+    dp_email = norm_email
+    dp_id = link_or_create_data_principal(dp_email, dp_name)
 
     # ── UNIVERSAL EMAIL CONTENT ANALYSIS ─────────────────────────────────────
     # Domain, purpose, and attributes are extracted from the ACTUAL email
@@ -418,6 +650,13 @@ def dynamic_create_request_for_token(
     final_purpose   = purpose or extract_purpose_from_content(subject or "", body or "")
     final_fiduciary = resolve_fiduciary_name(token, final_domain, subject or "", body or "", fiduciary or "")
     final_category, final_logo = get_fiduciary_metadata(final_fiduciary, final_domain)
+
+    # Intent detection metadata default if not explicitly provided
+    if intent_score is None:
+        det = detect_consent_intent(final_subject, body or "", final_fiduciary)
+        intent_score = det["score"]
+        intent_classification = det["classification"]
+        intent_reasons = json.dumps(det["reasons"])
 
     # CRITICAL: Always use the real email body as-is.
     # Only fall back to a generic template if no body was provided at all.
@@ -431,14 +670,14 @@ def dynamic_create_request_for_token(
 
     # Dynamically extract attributes from the actual email content
     requested_attrs = extract_attributes_from_email_content(
-        subject or "", body or ""
+        subject or "", body or "", domain=final_domain
     )
 
     # 2. Create EmailSnapshot
-    snapshot_id = f"ES-2026-CIALFOR-{random.randint(1000, 9999)}"
+    snapshot_id = f"ES-2026-CIALFOR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}"
     cursor.execute("""
-    INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size, dkim_status, spf_status, thread_id, message_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size, dkim_status, spf_status, thread_id, message_id, intent_score, intent_classification, intent_reasons)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         snapshot_id,
         f"{final_fiduciary} <compliance@{final_domain.lower().replace(' ', '').replace('/', '')}.com>",
@@ -451,18 +690,21 @@ def dynamic_create_request_for_token(
         "DKIM Signed",
         "SPF Pass",
         thread_id,
-        message_id
+        message_id,
+        intent_score,
+        intent_classification,
+        intent_reasons
     ))
 
     # 3. Create ConsentRequest
-    req_id = f"REQ-2026-CIALFOR-{random.randint(100, 999)}"
-    notice_id = f"NTC-2026-CIALFOR-{random.randint(100, 999)}"
+    req_id = f"REQ-2026-CIALFOR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
+    notice_id = f"NTC-2026-CIALFOR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
     now = datetime.utcnow().isoformat() + "Z"
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
 
     cursor.execute("""
-    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, domain, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at, thread_id, message_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, domain, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at, thread_id, message_id, intent_score, intent_classification, intent_reasons)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         req_id,
         token,
@@ -485,7 +727,10 @@ def dynamic_create_request_for_token(
         now,
         expires,
         thread_id,
-        message_id
+        message_id,
+        intent_score,
+        intent_classification,
+        intent_reasons
     ))
 
     conn.commit()
@@ -498,67 +743,417 @@ def health_check():
     return {
         "status": "HEALTHY",
         "service": "Python FastAPI DP Consent Manager Backend (Real Email Integration)",
-        "security_features": ["cryptographic_tokens", "server_timestamps", "expiry_handling", "duplicate_prevention", "attribute_validation"],
+        "security_features": ["cryptographic_tokens", "server_timestamps", "expiry_handling", "duplicate_prevention", "attribute_validation", "jwt_auth", "rbac"],
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
+# ── AUTHENTICATION & RBAC ENDPOINTS ──────────────────────────────────────────
+
+EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+
+@app.post("/api/auth/register", response_model=AuthResponse)
+def register_user(payload: UserRegisterPayload):
+    # 1. Required fields check
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Full name is required.")
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email address is required.")
+    if not payload.password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+
+    # 2. Email format validation
+    normalized_email = payload.email.strip().lower()
+    if not re.match(EMAIL_REGEX, normalized_email):
+        raise HTTPException(status_code=422, detail="Invalid email address format.")
+
+    # 3. Duplicate email check
+    existing = get_user_by_email(normalized_email)
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email address already exists.")
+
+    # 4. Password strength validation
+    valid_pwd, pwd_error = validate_password_strength(payload.password)
+    if not valid_pwd:
+        raise HTTPException(status_code=422, detail=pwd_error)
+
+    # 5. Strict Role Enforcement: Public self-registration is strictly restricted to DATA_PRINCIPAL
+    role_input = (payload.role or "DATA_PRINCIPAL").strip().upper()
+    if role_input not in ["DATA_PRINCIPAL", "PRINCIPAL", "CITIZEN", ""]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public self-registration is strictly restricted to Data Principals. Data Fiduciary / Admin accounts cannot be self-registered and must be provisioned by a system administrator."
+        )
+
+    role = "DATA_PRINCIPAL"
+    dp_id = link_or_create_data_principal(normalized_email, payload.name.strip())
+    fiduciary_name = None
+
+    # 6. Secure password hashing with bcrypt
+    pw_hash = hash_password(payload.password)
+
+    # 7. Create user account
+    user_row = create_user_account(
+        name=payload.name.strip(),
+        email=normalized_email,
+        password_hash=pw_hash,
+        role=role,
+        data_principal_id=dp_id,
+        fiduciary_name=fiduciary_name
+    )
+
+    # 8. Issue JWT
+    token = create_access_token({
+        "sub": user_row["id"],
+        "email": user_row["email"],
+        "role": user_row["role"],
+        "dp_id": user_row.get("data_principal_id"),
+        "name": user_row["name"]
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_row
+    }
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+def login_user(payload: UserLoginPayload):
+    if not payload.email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+
+    normalized_email = payload.email.strip().lower()
+    user = get_user_by_email(normalized_email)
+    if not user or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    token = create_access_token({
+        "sub": user["id"],
+        "email": user["email"],
+        "role": user["role"],
+        "dp_id": user.get("data_principal_id"),
+        "name": user["name"]
+    })
+
+    user_clean = {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "role": user["role"],
+        "data_principal_id": user.get("data_principal_id"),
+        "fiduciary_name": user.get("fiduciary_name"),
+        "created_at": user.get("created_at")
+    }
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_clean
+    }
+
+
+@app.get("/api/auth/me")
+def get_current_user_profile(current_user: dict = Depends(get_current_user)):
+    return {
+        "user": {
+            "id": current_user["id"],
+            "name": current_user["name"],
+            "email": current_user["email"],
+            "role": current_user["role"],
+            "data_principal_id": current_user.get("data_principal_id"),
+            "fiduciary_name": current_user.get("fiduciary_name"),
+            "created_at": current_user.get("created_at")
+        }
+    }
+
+
+@app.post("/api/admin/users/provision", response_model=AuthResponse)
+def provision_fiduciary_user(
+    payload: AdminUserProvisionPayload,
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
+    """
+    Controlled administrative endpoint to provision Data Fiduciary or Admin accounts.
+    Accessible only by authenticated administrators / data fiduciaries.
+    """
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Full name is required.")
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email address is required.")
+    if not payload.password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+
+    normalized_email = payload.email.strip().lower()
+    if not re.match(EMAIL_REGEX, normalized_email):
+        raise HTTPException(status_code=422, detail="Invalid email address format.")
+
+    existing = get_user_by_email(normalized_email)
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email address already exists.")
+
+    valid_pwd, pwd_error = validate_password_strength(payload.password)
+    if not valid_pwd:
+        raise HTTPException(status_code=422, detail=pwd_error)
+
+    role_input = payload.role.strip().upper()
+    if role_input not in ["DATA_FIDUCIARY", "ADMIN", "DATA_PRINCIPAL"]:
+        raise HTTPException(status_code=422, detail="Invalid role specified. Must be DATA_FIDUCIARY or ADMIN.")
+
+    dp_id = None
+    fiduciary_name = None
+    if role_input == "DATA_PRINCIPAL":
+        dp_id = link_or_create_data_principal(normalized_email, payload.name.strip())
+    else:
+        fiduciary_name = payload.fiduciary_name.strip() if payload.fiduciary_name else (current_user.get("fiduciary_name") or "Cialfor Research Labs Private Limited")
+
+    pw_hash = hash_password(payload.password)
+    user_row = create_user_account(
+        name=payload.name.strip(),
+        email=normalized_email,
+        password_hash=pw_hash,
+        role=role_input,
+        data_principal_id=dp_id,
+        fiduciary_name=fiduciary_name
+    )
+
+    token = create_access_token({
+        "sub": user_row["id"],
+        "email": user_row["email"],
+        "role": user_row["role"],
+        "dp_id": user_row.get("data_principal_id"),
+        "name": user_row["name"]
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user_row
+    }
+
+
+# ── GMAIL SYNC & INGESTION (SERVER-TO-SERVER AUTHENTICATION) ──────────────────
+
+def verify_webhook_secret(
+    x_webhook_secret: Optional[str] = Header(None, alias="X-Webhook-Secret"),
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> bool:
+    """
+    Authenticate server-to-server webhook requests from Google Apps Script.
+    Requires GMAIL_WEBHOOK_SECRET from the environment.
+    Fails securely if GMAIL_WEBHOOK_SECRET is not configured.
+    """
+    expected_secret = os.getenv("GMAIL_WEBHOOK_SECRET")
+    if not expected_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server configuration error: GMAIL_WEBHOOK_SECRET environment variable is not configured."
+        )
+
+    provided_secret = None
+    if x_webhook_secret:
+        provided_secret = x_webhook_secret.strip()
+    elif authorization and authorization.startswith("Bearer "):
+        provided_secret = authorization.split("Bearer ", 1)[1].strip()
+
+    if not provided_secret or not hmac.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Missing or invalid server-to-server webhook secret."
+        )
+    return True
+
+
+def is_system_generated_email(
+    from_address: Optional[str] = "",
+    subject: Optional[str] = "",
+    body_text: Optional[str] = "",
+    fiduciary_name: Optional[str] = ""
+) -> tuple[bool, str]:
+    """
+    Defense-in-depth guard:
+    Detects whether an incoming email was generated by our own DPDP Privacy Portal / system
+    (e.g., status reply receipts, DP statutory notifications, privacy grievance notices)
+    rather than being a genuine incoming consent request from a third-party Data Fiduciary.
+    """
+    from_str = (from_address or "").strip().lower()
+    subj_str = (subject or "").strip()
+    body_str = (body_text or "").strip()
+    fid_str = (fiduciary_name or "").strip().lower()
+
+    # 1. Sender or fiduciary matches system identity
+    if "dpdp privacy portal" in fid_str:
+        return True, "fiduciary_name_is_dpdp_privacy_portal"
+    if "dpdp privacy portal" in from_str:
+        return True, "sender_is_dpdp_privacy_portal"
+
+    # 2. Portal signature phrases in body
+    portal_signatures = [
+        "DIGITAL CONSENT STATUS UPDATE",
+        "SHA-256 Integrity Hash",
+        "Generated by Data Principal Consent Manager",
+        "Secured by Data Principal Consent Manager",
+        "Dispatched via Data Principal Consent Manager",
+        "=== PRIVACY GRIEVANCE NOTICE ===",
+    ]
+    for marker in portal_signatures:
+        if marker.lower() in body_str.lower():
+            clean_marker = marker.replace(" ", "_").replace("=", "").lower()
+            return True, f"contains_marker_{clean_marker}"
+
+    # 3. Subject starts with "Re:" AND body/subject contains explicit consent decision badges
+    if re.match(r"^re:\s*", subj_str, re.IGNORECASE):
+        reply_markers = [
+            "CONSENT GRANTED",
+            "CONSENT DENIED",
+            "DPDP Consent Response",
+            "Digital Consent Status Confirmation",
+        ]
+        for marker in reply_markers:
+            if marker.lower() in body_str.lower() or marker.lower() in subj_str.lower():
+                clean_marker = marker.replace(" ", "_").lower()
+                return True, f"reply_with_marker_{clean_marker}"
+
+    # 4. Automated DP statutory notification dispatched by sync script
+    if re.match(r"^new consent request:", subj_str, re.IGNORECASE):
+        if "automated statutory notice under the digital personal data protection" in body_str.lower():
+            return True, "automated_dp_statutory_notice"
+
+    return False, ""
+
+
 @app.post("/api/gmail-webhook")
-@app.post("/api/sync-gmail")
-@app.post("/api/ingest-email")
-def sync_gmail_webhook(payload: EmailIngestPayload):
+def sync_gmail_webhook(
+    payload: EmailIngestPayload,
+    _authorized: bool = Depends(verify_webhook_secret)
+):
+    # 1. Defense-in-depth guard: Ignore system-generated receipts/replies/notifications
+    is_sys, sys_reason = is_system_generated_email(
+        from_address=payload.from_address,
+        subject=payload.subject,
+        body_text=payload.body_text,
+        fiduciary_name=payload.fiduciary_name
+    )
+    if is_sys:
+        return {
+            "ignored": True,
+            "reason": "system_generated_message",
+            "detail": sys_reason
+        }
+
+    # 2. Consent Intent Detector:
+    # Requires contextual evidence; keyword matches alone must not create requests.
+    intent_result = detect_consent_intent(
+        subject=payload.subject or "",
+        body=payload.body_text or "",
+        sender=payload.from_address or "",
+        fiduciary_name=payload.fiduciary_name or ""
+    )
+
+    logger.info(
+        f"[INTENT-DETECTOR] Subject: '{payload.subject}' -> "
+        f"Classification: {intent_result['classification']}, "
+        f"Score: {intent_result['score']}, Confidence: {intent_result['confidence']}, "
+        f"Reasons: {intent_result['reasons']}"
+    )
+
+    if not intent_result["is_consent_request"]:
+        return {
+            "ignored": True,
+            "reason": f"intent_{intent_result['classification'].lower()}",
+            "detail": intent_result["reasons"],
+            "classification": intent_result["classification"],
+            "intent_score": intent_result["score"],
+            "intent_classification": intent_result["classification"],
+            "intent_reasons": intent_result["reasons"],
+            "confidence": intent_result["confidence"]
+        }
+
     conn = get_db()
     cursor = conn.cursor()
 
-    to_parts = payload.to_address.split("<")
-    if len(to_parts) > 1:
-        dp_name = to_parts[0].strip()
-        dp_email = to_parts[1].replace(">", "").strip()
+    parsed_name, norm_email = normalize_email_address(payload.to_address)
+    dp_name = parsed_name or "Data Principal"
+    dp_email = norm_email
+    dp_id = link_or_create_data_principal(dp_email, dp_name)
+
+    clean_message_id = (payload.message_id or "").strip()
+    clean_thread_id = (payload.thread_id or "").strip()
+
+    # 1. PRIMARY IDEMPOTENCY CHECK:
+    # Deduplicate by Gmail message_id across consent_requests & email_snapshots
+    row = None
+    if clean_message_id:
+        cursor.execute("""
+            SELECT cr.* FROM consent_requests cr
+            WHERE cr.message_id = ? 
+               OR cr.email_snapshot_id IN (SELECT es.id FROM email_snapshots es WHERE es.message_id = ?)
+            ORDER BY cr.created_at ASC LIMIT 1;
+        """, (clean_message_id, clean_message_id))
+        row = cursor.fetchone()
+
+    # 2. SECONDARY CHECK: If no message_id match, look for extracted token or token in body
+    token = None
+    if row:
+        token = row["token"]
     else:
-        dp_email = payload.to_address.strip()
-        dp_name = dp_email.split("@")[0].replace(".", " ").title()
-
-    # Prefer extracted_token from webhook payload, then look in body text, or generate new
-    token = payload.extracted_token
-    if not token:
-        token_match = re.search(r'/request/([a-zA-Z0-9_\-]+)', payload.body_text)
-        token = token_match.group(1) if token_match else generate_unpredictable_token()
-
-    cursor.execute("SELECT * FROM consent_requests WHERE token = ? OR notice_id = ? OR id = ?;", (token, token, token))
-    row = cursor.fetchone()
+        token = payload.extracted_token
+        if not token and payload.body_text:
+            token_match = re.search(r'/request/([a-zA-Z0-9_\-]+)', payload.body_text)
+            token = token_match.group(1) if token_match else None
+        
+        if token:
+            cursor.execute("SELECT * FROM consent_requests WHERE token = ? OR notice_id = ? OR id = ?;", (token, token, token))
+            row = cursor.fetchone()
+            if row:
+                token = row["token"]
 
     # Extract dynamic domain, purpose, and attributes from the actual email content
     new_domain = payload.domain or detect_domain_from_content(payload.subject, payload.body_text)
     new_purpose = payload.purpose or extract_purpose_from_content(payload.subject, payload.body_text)
-    new_attrs = extract_attributes_from_email_content(payload.subject, payload.body_text)
-    fiduciary_name = resolve_fiduciary_name(token, new_domain, payload.subject, payload.body_text, payload.fiduciary_name or "")
+    new_attrs = extract_attributes_from_email_content(payload.subject, payload.body_text, domain=new_domain)
+    fiduciary_input = payload.fiduciary_name
+    if not fiduciary_input and payload.from_address and "<" in payload.from_address:
+        fiduciary_input = payload.from_address.split("<")[0].replace('"', '').strip()
+    fiduciary_name = resolve_fiduciary_name(token or "", new_domain, payload.subject, payload.body_text, fiduciary_input or "")
     fiduciary_category, fiduciary_logo = get_fiduciary_metadata(fiduciary_name, new_domain)
     sent_date_str = payload.sent_date or datetime.utcnow().strftime("%A, %B %d, %Y")
 
-    dp_id = generate_data_principal_id(dp_email)
-    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-    if not cursor.fetchone():
-        cursor.execute("""
-        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """, (dp_id, dp_name, dp_email, "+91 98765 12345", "CIALFOR-DP-2026", fiduciary_name, "Verified", datetime.utcnow().isoformat() + "Z"))
+    is_new = not bool(row)
 
     if row:
         req = dict(row)
-        cursor.execute("""
-            UPDATE consent_requests 
-            SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
-            WHERE id = ?;
-        """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), payload.thread_id, payload.message_id, req["id"]))
+        token = req["token"]
+        effective_message_id = clean_message_id or req.get("message_id")
+        effective_thread_id = clean_thread_id or req.get("thread_id")
+
+        if req.get("status") == "PENDING":
+            cursor.execute("""
+                UPDATE consent_requests 
+                SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id), intent_score = ?, intent_classification = ?, intent_reasons = ?
+                WHERE id = ?;
+            """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), effective_thread_id, effective_message_id, intent_result["score"], intent_result["classification"], json.dumps(intent_result["reasons"]), req["id"]))
+        else:
+            cursor.execute("""
+                UPDATE consent_requests 
+                SET thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id), intent_score = ?, intent_classification = ?, intent_reasons = ?
+                WHERE id = ?;
+            """, (effective_thread_id, effective_message_id, intent_result["score"], intent_result["classification"], json.dumps(intent_result["reasons"]), req["id"]))
         
         cursor.execute("""
             UPDATE email_snapshots 
-            SET from_address = ?, to_address = ?, subject = ?, body_text = ?, sent_date = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
+            SET subject = ?, body_text = ?, from_address = ?, to_address = ?, sent_date = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id), intent_score = ?, intent_classification = ?, intent_reasons = ?
             WHERE id = ?;
-        """, (payload.from_address or f"{fiduciary_name} <compliance@{new_domain.lower().replace(' ', '').replace('/', '')}.com>", f"{dp_name} <{dp_email}>", payload.subject, payload.body_text, sent_date_str, payload.thread_id, payload.message_id, req["email_snapshot_id"]))
+        """, (payload.subject, payload.body_text, payload.from_address, payload.to_address, sent_date_str, effective_thread_id, effective_message_id, intent_result["score"], intent_result["classification"], json.dumps(intent_result["reasons"]), req["email_snapshot_id"]))
         conn.commit()
         cursor.execute("SELECT * FROM consent_requests WHERE id = ?;", (req["id"],))
         row = cursor.fetchone()
     else:
+        if not token:
+            token = generate_unpredictable_token()
         row = dynamic_create_request_for_token(
             token=token,
             conn=conn,
@@ -568,31 +1163,51 @@ def sync_gmail_webhook(payload: EmailIngestPayload):
             body=payload.body_text,
             purpose=new_purpose,
             fiduciary=fiduciary_name,
-            thread_id=payload.thread_id,
-            message_id=payload.message_id
+            thread_id=clean_thread_id or payload.thread_id,
+            message_id=clean_message_id or payload.message_id,
+            intent_score=intent_result["score"],
+            intent_classification=intent_result["classification"],
+            intent_reasons=json.dumps(intent_result["reasons"])
         )
 
     req = dict(row)
     result = hydrate_request(row, conn)
     conn.close()
 
-    result["token"] = token
-    result["link"] = f"http://localhost:5173/request/{token}"
+    result["is_new"] = is_new
+    result["token"] = req["token"]
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:8000").rstrip("/")
+    result["link"] = f"{frontend_base}/request/{req['token']}"
+    result["intent_score"] = intent_result["score"]
+    result["intent_classification"] = intent_result["classification"]
+    result["intent_reasons"] = intent_result["reasons"]
+    result["intentScore"] = intent_result["score"]
+    result["intentClassification"] = intent_result["classification"]
+    result["intentReasons"] = intent_result["reasons"]
+    return result
+
+
+@app.post("/api/sync-gmail")
+@app.post("/api/ingest-email")
+def ingest_email_without_debug_metadata(
+    payload: EmailIngestPayload,
+    _authorized: bool = Depends(verify_webhook_secret)
+):
+    result = strip_admin_fields(sync_gmail_webhook(payload, _authorized))
+    if result.get("ignored") and result.get("reason", "").startswith("intent_"):
+        return {"ignored": True, "reason": "not_a_consent_request"}
     return result
 
 
 @app.post("/api/consent-requests")
-def create_consent_request(payload: ConsentRequestCreatePayload):
+def create_consent_request(payload: ConsentRequestCreatePayload, current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))):
     conn = get_db()
     cursor = conn.cursor()
 
-    dp_id = generate_data_principal_id(payload.principal_email)
-    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-    if not cursor.fetchone():
-        cursor.execute("""
-        INSERT INTO data_principals (id, name, email, registered_on)
-        VALUES (?, ?, ?, ?);
-        """, (dp_id, payload.principal_name, payload.principal_email, datetime.utcnow().isoformat() + "Z"))
+    parsed_name, norm_email = normalize_email_address(payload.principal_email)
+    dp_name = payload.principal_name or parsed_name or "Data Principal"
+    dp_email = norm_email
+    dp_id = link_or_create_data_principal(dp_email, dp_name)
 
     snapshot_id = f"ES-2026-{random.randint(1000, 9999)}"
     cursor.execute("""
@@ -601,7 +1216,7 @@ def create_consent_request(payload: ConsentRequestCreatePayload):
     """, (
         snapshot_id,
         f"{payload.fiduciary_name} <{payload.fiduciary_email}>",
-        f"{payload.principal_name} <{payload.principal_email}>",
+        f"{dp_name} <{dp_email}>",
         payload.email_subject,
         datetime.utcnow().strftime("%A, %B %d, %Y"),
         payload.email_body,
@@ -609,9 +1224,9 @@ def create_consent_request(payload: ConsentRequestCreatePayload):
         "1.2 MB"
     ))
 
-    req_id = f"REQ-2026-CR-{random.randint(100, 999)}"
+    req_id = f"REQ-2026-CR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
     token = generate_unpredictable_token()
-    notice_id = payload.notice_id or f"NTC-2026-CR-{random.randint(100, 999)}"
+    notice_id = payload.notice_id or f"NTC-2026-CR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(100, 999)}"
     now = datetime.utcnow().isoformat() + "Z"
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
 
@@ -644,7 +1259,7 @@ def create_consent_request(payload: ConsentRequestCreatePayload):
 
     cursor.execute("SELECT * FROM consent_requests WHERE id = ?;", (req_id,))
     row = cursor.fetchone()
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
@@ -675,19 +1290,15 @@ def resolve_consent_request(
         params_es = []
 
         if to_email:
-            dp_id = generate_data_principal_id(to_email)
-            dp_name = to_name or "Prerna Pandey"
-            cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                """, (dp_id, dp_name, to_email, "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", datetime.utcnow().isoformat() + "Z"))
-            updates_cr.append("data_principal_id = ?")
-            params_cr.append(dp_id)
-            updates_es.append("to_address = ?")
-            params_es.append(f"{dp_name} <{to_email}>")
-            need_update = True
+            parsed_name, norm_email = normalize_email_address(to_email)
+            if norm_email:
+                dp_name = to_name or parsed_name or "Data Principal"
+                dp_id = link_or_create_data_principal(norm_email, dp_name)
+                updates_cr.append("data_principal_id = ?")
+                params_cr.append(dp_id)
+                updates_es.append("to_address = ?")
+                params_es.append(f"{dp_name} <{norm_email}>")
+                need_update = True
 
         if subject:
             updates_es.append("subject = ?")
@@ -742,7 +1353,7 @@ def resolve_consent_request(
         conn.close()
         raise HTTPException(status_code=410, detail="Consent request link has expired.")
 
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
@@ -762,17 +1373,88 @@ def get_consent_request_by_notice(notice_id: str = Path(...)):
         conn.close()
         raise HTTPException(status_code=410, detail="Consent request link has expired.")
 
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
-@app.get("/api/consent-requests")
-def list_consent_requests():
+@app.get("/api/me/consent-requests")
+def list_my_consent_requests(
+    status: Optional[str] = Query(None, description="Filter by status: PENDING, GRANTED, DENIED, etc."),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Authoritative endpoint for Data Principal to discover all their consent requests.
+    Derives identity exclusively from authenticated JWT session.
+    """
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM consent_requests;")
+
+    dp_id = current_user.get("dp_id")
+    if not dp_id:
+        _, norm_user_email = normalize_email_address(current_user.get("email", ""))
+        if norm_user_email:
+            dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+
+    if not dp_id:
+        conn.close()
+        return []
+
+    if status:
+        cursor.execute(
+            "SELECT * FROM consent_requests WHERE data_principal_id = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
+            (dp_id, status.strip().upper())
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM consent_requests WHERE data_principal_id = ? ORDER BY created_at DESC;",
+            (dp_id,)
+        )
     rows = cursor.fetchall()
-    results = [hydrate_request(r, conn) for r in rows]
+    results = [strip_admin_fields(hydrate_request(r, conn)) for r in rows]
+    conn.close()
+    return results
+
+
+@app.get("/api/consent-requests")
+def list_consent_requests(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_db()
+    cursor = conn.cursor()
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        if not dp_id:
+            _, norm_user_email = normalize_email_address(current_user.get("email", ""))
+            if norm_user_email:
+                dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+        if status:
+            cursor.execute(
+                "SELECT * FROM consent_requests WHERE data_principal_id = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
+                (dp_id, status.strip().upper())
+            )
+        else:
+            cursor.execute("SELECT * FROM consent_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
+    else:
+        fiduciary_name = current_user.get("fiduciary_name")
+        if fiduciary_name:
+            if status:
+                cursor.execute(
+                    "SELECT * FROM consent_requests WHERE fiduciary_name = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
+                    (fiduciary_name, status.strip().upper())
+                )
+            else:
+                cursor.execute("SELECT * FROM consent_requests WHERE fiduciary_name = ? ORDER BY created_at DESC;", (fiduciary_name,))
+        else:
+            if status:
+                cursor.execute(
+                    "SELECT * FROM consent_requests WHERE UPPER(status) = ? ORDER BY created_at DESC;",
+                    (status.strip().upper(),)
+                )
+            else:
+                cursor.execute("SELECT * FROM consent_requests ORDER BY created_at DESC;")
+    rows = cursor.fetchall()
+    results = [strip_admin_fields(hydrate_request(r, conn)) for r in rows]
     conn.close()
     return results
 
@@ -801,12 +1483,9 @@ def get_consent_request_by_token_path(
             body = es_dict.get("body_text")
             to_addr = es_dict.get("to_address", "")
             from_addr = es_dict.get("from_address", "")
-            to_parts = to_addr.split("<")
-            if len(to_parts) > 1:
-                to_name = to_name or to_parts[0].strip()
-                to_email = to_email or to_parts[1].replace(">", "").strip()
-            else:
-                to_email = to_email or to_addr.strip()
+            parsed_n, norm_e = normalize_email_address(to_addr)
+            to_name = to_name or parsed_n
+            to_email = to_email or norm_e
             if from_addr and not fiduciary:
                 from_name = from_addr.split("<")[0].strip()
                 fiduciary = from_name if from_name else fiduciary
@@ -830,19 +1509,15 @@ def get_consent_request_by_token_path(
         params_es = []
 
         if to_email:
-            dp_id = generate_data_principal_id(to_email)
-            dp_name = to_name or "Prerna Pandey"
-            cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (dp_id,))
-            if not cursor.fetchone():
-                cursor.execute("""
-                INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                """, (dp_id, dp_name, to_email, "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs Private Limited", "Verified", datetime.utcnow().isoformat() + "Z"))
-            updates_cr.append("data_principal_id = ?")
-            params_cr.append(dp_id)
-            updates_es.append("to_address = ?")
-            params_es.append(f"{dp_name} <{to_email}>")
-            need_update = True
+            parsed_name, norm_email = normalize_email_address(to_email)
+            if norm_email:
+                dp_name = to_name or parsed_name or "Data Principal"
+                dp_id = link_or_create_data_principal(norm_email, dp_name)
+                updates_cr.append("data_principal_id = ?")
+                params_cr.append(dp_id)
+                updates_es.append("to_address = ?")
+                params_es.append(f"{dp_name} <{norm_email}>")
+                need_update = True
 
         if subject:
             updates_es.append("subject = ?")
@@ -897,12 +1572,16 @@ def get_consent_request_by_token_path(
         conn.close()
         raise HTTPException(status_code=410, detail="Consent request link has expired.")
 
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
 @app.post("/api/consent-requests/{request_id}/decision")
-def record_consent_decision(request_id: str, payload: DecisionPayload):
+def record_consent_decision(
+    request_id: str, 
+    payload: DecisionPayload, 
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     if payload.decision not in ["GRANTED", "DENIED"]:
         raise HTTPException(status_code=400, detail="Invalid decision (must be GRANTED or DENIED)")
 
@@ -916,6 +1595,30 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         raise HTTPException(status_code=404, detail="Consent request not found")
 
     req = dict(req_row)
+
+    # Enforce ownership: Data Principal can only submit decisions for their own requests.
+    # Resolve the authenticated user's canonical dp_id using the same logic as registration
+    # and Gmail-webhook ingestion (link_or_create_data_principal on the normalized email).
+    # This handles cases where the users.data_principal_id column was null or stale
+    # (e.g., the user registered before email-normalization was introduced, or before
+    # sync_and_normalize_data_principals ran). The RBAC check is NOT weakened: we still
+    # require the request's dp_id to match the dp_id derived from the authenticated user's
+    # own verified email — no other user's dp_id can satisfy this check.
+    user_dp_id = current_user.get("dp_id")
+    if not user_dp_id:
+        # Fall back: re-derive dp_id from the authenticated user's normalized email,
+        # using the same canonical function used during Gmail-sync ingestion.
+        _, norm_user_email = normalize_email_address(current_user.get("email", ""))
+        if norm_user_email:
+            user_dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+
+    if req["data_principal_id"] != user_dp_id:
+        conn.close()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to make a decision on another Data Principal's consent request."
+        )
+
     now = datetime.utcnow().isoformat() + "Z"
 
     if check_request_expiry(req, conn):
@@ -927,7 +1630,7 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
-            f"AUD-{random.randint(100, 999)}",
+            f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}",
             req["id"],
             "N/A",
             req["data_principal_id"],
@@ -1030,6 +1733,20 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
     cursor.execute("UPDATE consent_requests SET status = ? WHERE id = ?;", (payload.decision, req["id"]))
 
     consent_record = None
+    readable_granted = []
+    readable_denied = []
+    principal_name = current_user.get("name") or "Data Principal"
+    principal_email = current_user.get("email") or ""
+
+    try:
+        req_attrs = json.loads(req.get("requested_attributes") or "[]")
+        attr_map = {a.get("id"): a.get("name") for a in req_attrs if isinstance(a, dict)}
+        readable_granted = [attr_map.get(a, a) for a in (payload.selected_attributes or [])]
+        readable_denied = [attr_map.get(a, a) for a in (payload.denied_attributes or [])]
+    except Exception:
+        readable_granted = payload.selected_attributes or []
+        readable_denied = payload.denied_attributes or []
+
     if payload.decision == "GRANTED":
         consent_id = payload.consent_id or f"CNST-2026-{random.randint(1000, 9999)}"
         expiry = (datetime.utcnow() + timedelta(days=365)).isoformat() + "Z"
@@ -1043,18 +1760,6 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         })
 
         cursor.execute("DELETE FROM consents WHERE notice_id = ?;", (req["notice_id"],))
-
-        # Resolve human-readable attribute names from requested_attributes
-        readable_granted = []
-        readable_denied = []
-        try:
-            req_attrs = json.loads(req["requested_attributes"])
-            attr_map = {a.get("id"): a.get("name") for a in req_attrs if isinstance(a, dict)}
-            readable_granted = [attr_map.get(a, a) for a in payload.selected_attributes]
-            readable_denied = [attr_map.get(a, a) for a in payload.denied_attributes]
-        except Exception:
-            readable_granted = payload.selected_attributes
-            readable_denied = payload.denied_attributes
 
         cursor.execute("""
         INSERT INTO consents (consent_id, request_id, data_principal_id, fiduciary_name, fiduciary_category, fiduciary_logo, purpose, notice_id, status, granted_attributes, denied_attributes, dpo_contact, data_region, receipt_hash, custom_note, granted_on, expires_on)
@@ -1083,12 +1788,23 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         dp_row = cursor.fetchone()
         dp_dict = dict(dp_row) if dp_row else {}
 
+        principal_name = dp_dict.get("name")
+        if not principal_name:
+            cursor.execute("SELECT name FROM users WHERE data_principal_id = ? LIMIT 1;", (req["data_principal_id"],))
+            u_row = cursor.fetchone()
+            if u_row and u_row["name"]:
+                principal_name = u_row["name"]
+        if not principal_name:
+            principal_name = current_user.get("name") or "Data Principal"
+
+        principal_email = dp_dict.get("email") or current_user.get("email") or ""
+
         consent_record = {
             "consentId": consent_id,
             "requestId": req["id"],
             "principalId": req["data_principal_id"],
-            "principalName": dp_dict.get("name") or "Prerna Pandey",
-            "principalEmail": dp_dict.get("email") or "",
+            "principalName": principal_name,
+            "principalEmail": principal_email,
             "fiduciary": req["fiduciary_name"],
             "fiduciaryCategory": req["fiduciary_category"],
             "fiduciaryLogo": req["fiduciary_logo"],
@@ -1098,15 +1814,15 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
             "status": "ACTIVE",
             "grantedOn": now,
             "expiresOn": expiry,
-            "grantedAttributes": payload.selected_attributes,
-            "deniedAttributes": payload.denied_attributes,
+            "grantedAttributes": readable_granted,
+            "deniedAttributes": readable_denied,
             "dpoContact": req["dpo_email"],
             "dataRegion": req["data_region"],
             "receiptHash": receipt_hash,
             "customNote": payload.remark
         }
 
-    audit_id = f"AUD-{random.randint(100, 999)}"
+    audit_id = f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}"
     audit_action = "CONSENT_GRANTED" if payload.decision == "GRANTED" else "CONSENT_DENIED"
     audit_details = f"Granted {len(payload.selected_attributes)} attributes." if payload.decision == "GRANTED" else f"Consent request declined. Reason: {payload.remark or 'Declined'}"
 
@@ -1147,7 +1863,7 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
             match = re.search(r'<([^>]+)>', raw_from)
             actual_sender = match.group(1).strip() if match else (raw_from.strip() if "@" in raw_from else None)
 
-    recipient_email = actual_sender or req.get("fiduciary_email") or "compliance@fiduciary.com"
+    recipient_email = actual_sender or req.get("fiduciary_email") or req.get("dpo_email") or "compliance@fiduciary.com"
 
     notif_id = f"NOTIF-2026-{random.randint(1000, 9999)}"
     notif_details = {
@@ -1155,14 +1871,14 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
         "token": req.get("token"),
         "requestId": req["id"],
         "fiduciaryName": req["fiduciary_name"],
-        "principalName": consent_record.get("principalName", "Data Principal") if consent_record else "Data Principal",
-        "principalEmail": consent_record.get("principalEmail", "") if consent_record else "",
+        "principalName": consent_record.get("principalName", principal_name) if consent_record else (current_user.get("name") or "Data Principal"),
+        "principalEmail": consent_record.get("principalEmail", principal_email) if consent_record else (current_user.get("email") or ""),
         "recipientEmail": recipient_email,
         "originalSubject": original_subject,
         "noticeId": req["notice_id"],
         "purpose": req["purpose"],
-        "selectedAttributes": payload.selected_attributes,
-        "deniedAttributes": payload.denied_attributes,
+        "selectedAttributes": readable_granted if payload.decision == "GRANTED" else [],
+        "deniedAttributes": readable_denied,
         "remark": payload.remark,
         "artifact": consent_record if consent_record else {
             "decision": payload.decision,
@@ -1195,14 +1911,60 @@ def record_consent_decision(request_id: str, payload: DecisionPayload):
     conn.commit()
     conn.close()
 
+    # ── EVENT-DRIVEN IMMEDIATE DISPATCH ─────────────────────────────
+    # Trigger near-immediate receipt dispatch via Apps Script Web App
+    request_immediate_dispatch(notification_id=notif_id)
+
     return {
         "success": True,
         "message": f"Consent decision {payload.decision} recorded successfully.",
         "consent": consent_record
     }
 
+
+def request_immediate_dispatch(notification_id: Optional[str] = None):
+    """
+    Event-driven immediate receipt dispatch:
+    Triggers Google Apps Script via its deployed Web App webhook URL (APPS_SCRIPT_WEBAPP_URL)
+    to deliver pending receipts to the original Gmail thread near-immediately (< 2s)
+    rather than waiting up to 60s for the next scheduled trigger execution.
+
+    Runs in a non-blocking background daemon thread so the client HTTP response is instantaneous.
+    If APPS_SCRIPT_WEBAPP_URL is not configured or times out, the notification remains 'PENDING'
+    and will be automatically delivered by the 1-minute time-driven trigger as a zero-risk fallback.
+    """
+    dispatch_url = os.getenv("APPS_SCRIPT_WEBAPP_URL") or os.getenv("GMAIL_DISPATCH_WEBHOOK_URL")
+    if not dispatch_url:
+        return
+
+    secret = os.getenv("GMAIL_WEBHOOK_SECRET")
+
+    def _trigger():
+        try:
+            payload_data = {
+                "secret": secret,
+                "notification_id": notification_id,
+                "action": "DISPATCH_PENDING"
+            }
+            req_data = json.dumps(payload_data).encode("utf-8")
+            req = urllib.request.Request(
+                dispatch_url,
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Webhook-Secret": secret or ""
+                }
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                print(f"[DISPATCH] Immediate dispatch triggered: HTTP {resp.status}")
+        except Exception as ex:
+            print(f"[DISPATCH-WARN] Immediate dispatch trigger encountered error: {ex}. 1-min scheduled trigger will deliver as fallback.")
+
+    threading.Thread(target=_trigger, daemon=True).start()
+
+
 @app.get("/api/notifications/pending")
-def list_pending_notifications():
+def list_pending_notifications(_authorized: bool = Depends(verify_webhook_secret)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM fiduciary_notifications WHERE status = 'PENDING' ORDER BY created_at ASC;")
@@ -1220,7 +1982,10 @@ def list_pending_notifications():
     return results
 
 @app.post("/api/notifications/{notification_id}/ack")
-def acknowledge_notification(notification_id: str):
+def acknowledge_notification(
+    notification_id: str,
+    _authorized: bool = Depends(verify_webhook_secret)
+):
     conn = get_db()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat() + "Z"
@@ -1230,19 +1995,37 @@ def acknowledge_notification(notification_id: str):
     return {"success": True, "id": notification_id, "status": "SENT", "sent_at": now}
 
 
+@app.post("/api/notifications/dispatch-immediate")
+def trigger_dispatch_immediate(
+    _authorized: bool = Depends(verify_webhook_secret)
+):
+    """
+    Triggers immediate event-driven dispatch of all pending notifications.
+    Can be called directly by administrators, tests, or external webhooks.
+    """
+    dispatch_url = os.getenv("APPS_SCRIPT_WEBAPP_URL") or os.getenv("GMAIL_DISPATCH_WEBHOOK_URL")
+    request_immediate_dispatch()
+    return {
+        "success": True,
+        "message": "Immediate dispatch requested.",
+        "dispatch_url_configured": bool(dispatch_url)
+    }
+
+
 @app.get("/api/consents")
-def list_consents(principalId: Optional[str] = Query(None)):
+def list_consents(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
-    rows = []
-    if principalId:
-        cursor.execute("SELECT * FROM consents WHERE data_principal_id = ? ORDER BY granted_on DESC;", (principalId,))
-        rows = cursor.fetchall()
-    
-    # If no results found for specific principalId or principalId not supplied, return all consents
-    if not rows:
-        cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
-        rows = cursor.fetchall()
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        cursor.execute("SELECT * FROM consents WHERE data_principal_id = ? ORDER BY granted_on DESC;", (dp_id,))
+    else:
+        fiduciary_name = current_user.get("fiduciary_name")
+        if fiduciary_name:
+            cursor.execute("SELECT * FROM consents WHERE fiduciary_name = ? ORDER BY granted_on DESC;", (fiduciary_name,))
+        else:
+            cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
+    rows = cursor.fetchall()
     conn.close()
 
     results = []
@@ -1281,7 +2064,7 @@ def list_consents(principalId: Optional[str] = Query(None)):
     return results
 
 @app.get("/api/consents/{consent_id}/receipt")
-def get_consent_receipt(consent_id: str):
+def get_consent_receipt(consent_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM consents WHERE consent_id = ?;", (consent_id,))
@@ -1291,6 +2074,10 @@ def get_consent_receipt(consent_id: str):
         raise HTTPException(status_code=404, detail="Consent record not found")
 
     consent = dict(row)
+    if current_user.get("role") == "DATA_PRINCIPAL" and consent["data_principal_id"] != current_user.get("dp_id"):
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You do not have permission to access this receipt.")
+
     cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (consent["data_principal_id"],))
     dp_row = cursor.fetchone()
     dp = dict(dp_row) if dp_row else {}
@@ -1309,38 +2096,79 @@ def get_consent_receipt(consent_id: str):
             "principalName": dp.get("name", "Data Principal"),
             "principalEmail": dp.get("email", ""),
             "principalId": dp.get("id", ""),
+            "sha256IntegrityHash": consent["receipt_hash"],
+            "receiptHash": consent["receipt_hash"],
             "verifiedSignature": consent["receipt_hash"]
         }
     }
 
 @app.post("/api/consents/{consent_id}/revoke")
-def revoke_consent(consent_id: str, payload: RevokePayload):
+async def revoke_consent(
+    consent_id: str, 
+    request: Request,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL", "ADMIN"]))
+):
+    # Flexible payload extraction: accept dict, string, or empty body without failing
+    reason = "Consent withdrawn by Data Principal under DPDP Act Sec 6(4)"
+    try:
+        raw_body = await request.json()
+        if isinstance(raw_body, dict):
+            reason = raw_body.get("reason") or reason
+        elif isinstance(raw_body, str) and raw_body.strip():
+            reason = raw_body.strip()
+    except Exception:
+        try:
+            text_body = (await request.body()).decode("utf-8").strip()
+            if text_body:
+                reason = text_body
+        except Exception:
+            pass
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM consents WHERE consent_id = ?;", (consent_id,))
     row = cursor.fetchone()
     if not row:
+        cursor.execute("SELECT * FROM consents WHERE LOWER(consent_id) = LOWER(?);", (consent_id,))
+        row = cursor.fetchone()
+
+    if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Active consent record not found")
 
     consent = dict(row)
+    user_dp_id = current_user.get("dp_id")
+    user_id = current_user.get("id")
+    user_email = current_user.get("email")
+    is_admin = current_user.get("role") == "ADMIN"
+
+    is_owner = (
+        is_admin or
+        (consent.get("data_principal_id") and consent["data_principal_id"] in (user_dp_id, user_id)) or
+        (consent.get("data_principal_email") and consent["data_principal_email"] == user_email)
+    )
+    if not is_owner:
+        conn.close()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You can only revoke your own consent.")
+
     now = datetime.utcnow().isoformat() + "Z"
 
-    cursor.execute("UPDATE consents SET status = 'REVOKED', revoked_on = ?, revocation_reason = ? WHERE consent_id = ?;", (now, payload.reason, consent_id))
-    cursor.execute("UPDATE consent_requests SET status = 'REVOKED' WHERE id = ? OR notice_id = ?;", (consent["request_id"], consent["notice_id"]))
+    cursor.execute("UPDATE consents SET status = 'REVOKED', revoked_on = ?, revocation_reason = ? WHERE consent_id = ?;", (now, reason, consent["consent_id"]))
+    if consent.get("request_id") or consent.get("notice_id"):
+        cursor.execute("UPDATE consent_requests SET status = 'REVOKED' WHERE id = ? OR notice_id = ?;", (consent.get("request_id"), consent.get("notice_id")))
 
     cursor.execute("""
     INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
-        f"AUD-{random.randint(100, 999)}",
-        consent["request_id"],
-        consent_id,
-        consent["data_principal_id"],
+        f"AUD-{random.randint(1000, 9999)}",
+        consent.get("request_id") or "N/A",
+        consent["consent_id"],
+        consent.get("data_principal_id"),
         "CONSENT_REVOKED",
-        consent["fiduciary_name"],
-        consent["notice_id"],
-        f"Consent revoked under DPDP Sec 6(4). Reason: {payload.reason}",
+        consent.get("fiduciary_name") or "Data Fiduciary",
+        consent.get("notice_id") or "NTC-REVOKED",
+        f"Consent revoked under DPDP Sec 6(4). Reason: {reason}",
         "103.21.124.88",
         now,
         "REVOKED"
@@ -1351,17 +2179,21 @@ def revoke_consent(consent_id: str, payload: RevokePayload):
 
     return {
         "success": True,
-        "message": f"Consent {consent_id} successfully revoked.",
-        "status": "REVOKED"
+        "consent_id": consent["consent_id"],
+        "message": f"Consent {consent['consent_id']} successfully revoked under DPDP Act Section 6(4).",
+        "status": "REVOKED",
+        "revoked_on": now,
+        "revocation_reason": reason
     }
 
 @app.get("/api/audit-logs")
 @app.get("/api/audit")
-def list_audit_logs(principalId: Optional[str] = Query(None)):
+def list_audit_logs(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
-    if principalId:
-        cursor.execute("SELECT * FROM audit_events WHERE data_principal_id = ? ORDER BY timestamp DESC;", (principalId,))
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        cursor.execute("SELECT * FROM audit_events WHERE data_principal_id = ? ORDER BY timestamp DESC;", (dp_id,))
     else:
         cursor.execute("SELECT * FROM audit_events ORDER BY timestamp DESC;")
     rows = cursor.fetchall()
@@ -1378,7 +2210,10 @@ def list_audit_logs(principalId: Optional[str] = Query(None)):
 
 @app.post("/api/data-rights/request")
 @app.post("/api/data-rights")
-def create_dsr_request(payload: DSRRequestPayload):
+def create_dsr_request(
+    payload: DSRRequestPayload,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1386,7 +2221,7 @@ def create_dsr_request(payload: DSRRequestPayload):
     now = datetime.utcnow()
     sla = (now + timedelta(days=30)).isoformat() + "Z"
     now_str = now.isoformat() + "Z"
-    dp_id = payload.dataPrincipalId or generate_data_principal_id("pandeyprerna1407@gmail.com")
+    dp_id = current_user.get("dp_id")
 
     cursor.execute("""
     INSERT INTO data_rights_requests (id, data_principal_id, request_type, target_fiduciary, details, status, sla_deadline, created_at)
@@ -1431,13 +2266,18 @@ def create_dsr_request(payload: DSRRequestPayload):
     }
 
 @app.get("/api/data-rights")
-def list_dsr_requests(principalId: Optional[str] = Query(None)):
+def list_dsr_requests(current_user: dict = Depends(get_current_user)):
     conn = get_db()
     cursor = conn.cursor()
-    if principalId:
-        cursor.execute("SELECT * FROM data_rights_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (principalId,))
+    if current_user.get("role") == "DATA_PRINCIPAL":
+        dp_id = current_user.get("dp_id")
+        cursor.execute("SELECT * FROM data_rights_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
     else:
-        cursor.execute("SELECT * FROM data_rights_requests ORDER BY created_at DESC;")
+        fiduciary_name = current_user.get("fiduciary_name")
+        if fiduciary_name:
+            cursor.execute("SELECT * FROM data_rights_requests WHERE target_fiduciary = ? ORDER BY created_at DESC;", (fiduciary_name,))
+        else:
+            cursor.execute("SELECT * FROM data_rights_requests ORDER BY created_at DESC;")
     rows = cursor.fetchall()
     conn.close()
 
@@ -1453,7 +2293,10 @@ def list_dsr_requests(principalId: Optional[str] = Query(None)):
     return results
 
 @app.post("/api/grievance")
-def submit_grievance(payload: GrievancePayload):
+def submit_grievance(
+    payload: GrievancePayload,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1461,7 +2304,7 @@ def submit_grievance(payload: GrievancePayload):
     now = datetime.utcnow()
     now_str = now.isoformat() + "Z"
     sla = (now + timedelta(days=7)).isoformat() + "Z"  # Statutory 7 working days SLA under DPDP Sec 13
-    dp_id = payload.dataPrincipalId or generate_data_principal_id("pandeyprerna1407@gmail.com")
+    dp_id = current_user.get("dp_id")
 
     # Look up fiduciary metadata, thread_id, and contact info
     thread_id = None
@@ -1580,6 +2423,9 @@ def submit_grievance(payload: GrievancePayload):
     conn.commit()
     conn.close()
 
+    # ── EVENT-DRIVEN IMMEDIATE DISPATCH ─────────────────────────────
+    request_immediate_dispatch(notification_id=notif_id)
+
     return {
         "success": True,
         "message": f"Statutory grievance {ticket_id} filed successfully under DPDP Act Section 13.",
@@ -1590,38 +2436,19 @@ def submit_grievance(payload: GrievancePayload):
     }
 
 @app.get("/api/nominee")
-def get_nominee(principalId: Optional[str] = Query(None), email: Optional[str] = Query(None)):
+def get_nominee(current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))):
     conn = get_db()
     cursor = conn.cursor()
 
-    row = None
-    if principalId and email:
-        cursor.execute("""
-        SELECT * FROM statutory_nominees 
-        WHERE (data_principal_id = ? OR principal_email = ?) AND status = 'ACTIVE_VERIFIED'
-        ORDER BY date_designated DESC LIMIT 1;
-        """, (principalId, email))
-        row = cursor.fetchone()
-    elif principalId:
-        cursor.execute("""
-        SELECT * FROM statutory_nominees 
-        WHERE data_principal_id = ? AND status = 'ACTIVE_VERIFIED'
-        ORDER BY date_designated DESC LIMIT 1;
-        """, (principalId,))
-        row = cursor.fetchone()
-    elif email:
-        cursor.execute("""
-        SELECT * FROM statutory_nominees 
-        WHERE principal_email = ? AND status = 'ACTIVE_VERIFIED'
-        ORDER BY date_designated DESC LIMIT 1;
-        """, (email,))
-        row = cursor.fetchone()
+    dp_id = current_user.get("dp_id")
+    email = current_user.get("email")
 
-    # Fallback to any active nominee if specific query returned nothing
-    if not row:
-        cursor.execute("SELECT * FROM statutory_nominees WHERE status = 'ACTIVE_VERIFIED' ORDER BY date_designated DESC LIMIT 1;")
-        row = cursor.fetchone()
-
+    cursor.execute("""
+    SELECT * FROM statutory_nominees 
+    WHERE (data_principal_id = ? OR principal_email = ?) AND status = 'ACTIVE_VERIFIED'
+    ORDER BY date_designated DESC LIMIT 1;
+    """, (dp_id, email))
+    row = cursor.fetchone()
     conn.close()
 
     if not row:
@@ -1645,7 +2472,10 @@ def get_nominee(principalId: Optional[str] = Query(None), email: Optional[str] =
     }
 
 @app.post("/api/nominee")
-def save_nominee(payload: NomineePayload):
+def save_nominee(
+    payload: NomineePayload,
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1654,8 +2484,8 @@ def save_nominee(payload: NomineePayload):
     now_str = now.isoformat() + "Z"
     date_str = now.strftime("%Y-%m-%d")
 
-    principal_email = payload.principalEmail or "pandeyprerna1407@gmail.com"
-    dp_id = payload.dataPrincipalId or generate_data_principal_id(principal_email)
+    dp_id = current_user.get("dp_id")
+    principal_email = current_user.get("email")
 
     # Check if active nominee already exists for this principal
     cursor.execute("""
@@ -1762,17 +2592,15 @@ def save_nominee(payload: NomineePayload):
     }
 
 @app.delete("/api/nominee")
-def remove_nominee(principalId: Optional[str] = Query(None), email: Optional[str] = Query(None)):
+def remove_nominee(current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))):
     conn = get_db()
     cursor = conn.cursor()
 
     now_str = datetime.utcnow().isoformat() + "Z"
-    dp_id = principalId or (generate_data_principal_id(email) if email else None)
+    dp_id = current_user.get("dp_id")
+    email = current_user.get("email")
 
-    if dp_id:
-        cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ? WHERE data_principal_id = ? OR principal_email = ?;", (now_str, dp_id, email))
-    else:
-        cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ?;", (now_str,))
+    cursor.execute("UPDATE statutory_nominees SET status = 'REVOKED', updated_at = ? WHERE data_principal_id = ? OR principal_email = ?;", (now_str, dp_id, email))
 
     # Log revocation in audit log
     cursor.execute("""
@@ -1788,9 +2616,56 @@ def remove_nominee(principalId: Optional[str] = Query(None), email: Optional[str
     conn.close()
     return {"success": True, "message": "Statutory nominee designation revoked."}
 
+
+# ── SINGLE-PORT SPA & STATIC ASSET SERVING ──────────────────────────────────
+
+@app.get("/")
+async def serve_root():
+    """Serves the compiled React application entry point (index.html)."""
+    index_file = os.path.join(DIST_DIR, "index.html")
+    if os.path.isfile(index_file):
+        return FileResponse(index_file, media_type="text/html")
+    return HTMLResponse(
+        "<html><body><h1>DP Consent Manager</h1><p>Frontend dist/ not built yet. Run <code>npm run build</code>.</p></body></html>",
+        status_code=200
+    )
+
+
+@app.get("/{full_path:path}")
+async def serve_spa_fallback(full_path: str):
+    """
+    SPA Fallback Route:
+    - Never intercepts /api/* routes (returns 404 JSON for unknown API endpoints).
+    - Serves static assets directly if the file exists in dist/.
+    - Serves index.html for all client-side routes (/dashboard, /request/<token>, etc.) on browser refresh.
+    """
+    # 1. Strict guard: Never intercept unmatched /api/* routes with HTML fallback
+    if full_path.startswith("api/") or full_path == "api":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"API endpoint '/{full_path}' not found."
+        )
+
+    # 2. Check if the requested path corresponds to an existing static file in DIST_DIR
+    requested_file = os.path.join(DIST_DIR, full_path)
+    if os.path.isfile(requested_file):
+        guessed_type, _ = mimetypes.guess_type(requested_file)
+        return FileResponse(requested_file, media_type=guessed_type)
+
+    # 3. SPA Fallback: Serve index.html for all frontend routes
+    index_file = os.path.join(DIST_DIR, "index.html")
+    if os.path.isfile(index_file):
+        return FileResponse(index_file, media_type="text/html")
+
+    return HTMLResponse(
+        "<html><body><h1>DP Consent Manager</h1><p>Frontend dist/ not built yet. Run <code>npm run build</code>.</p></body></html>",
+        status_code=200
+    )
+
+
 if __name__ == "__main__":
     print("====================================================")
-    print("DP Consent Manager Python FastAPI Real Email Backend")
-    print("REST Base URL: http://localhost:8000/api")
+    print("DP Consent Manager Single-Port React + FastAPI Server")
+    print("Serving UI & REST API Base: http://localhost:8000")
     print("====================================================")
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -6,7 +6,14 @@ import {
   Search, 
   ShieldAlert, 
   HelpCircle, 
-  Lock 
+  Building2,
+  GraduationCap,
+  HeartPulse,
+  CreditCard,
+  Landmark,
+  Calendar,
+  Clock,
+  Filter
 } from 'lucide-react';
 
 export const ActiveConsentsView = () => {
@@ -21,7 +28,7 @@ export const ActiveConsentsView = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('ALL'); // 'ALL', 'ACTIVE', 'REVOKED'
   const [revokingConsentId, setRevokingConsentId] = useState(null);
-  const [revokeReason, setRevokeReason] = useState('');
+  const [revokeReason, setRevokeReason] = useState('User exercised right to withdraw consent under DPDP Act');
 
   const filteredConsents = activeConsents.filter(c => {
     const fid = (c.fiduciary || c.fiduciary_name || '').toLowerCase();
@@ -36,13 +43,62 @@ export const ActiveConsentsView = () => {
   const activeCount = activeConsents.filter(c => c.status === 'ACTIVE').length;
   const revokedCount = activeConsents.filter(c => c.status === 'REVOKED').length;
 
-  const handleRevokeSubmit = (e) => {
+  const handleRevokeSubmit = async (e) => {
     e.preventDefault();
     if (revokingConsentId) {
-      revokeConsent(revokingConsentId, revokeReason || "Consent withdrawn by Data Principal");
+      const idToRevoke = revokingConsentId;
+      const reason = revokeReason || "Consent withdrawn by Data Principal under DPDP Act Sec 6(4)";
       setRevokingConsentId(null);
-      setRevokeReason('');
+      await revokeConsent(idToRevoke, reason);
     }
+  };
+
+  const getSectorIcon = (domain, fiduciaryName = '') => {
+    const d = (domain || '').toLowerCase();
+    const f = (fiduciaryName || '').toLowerCase();
+    if (d.includes('edu') || f.includes('institute') || f.includes('university') || f.includes('school')) {
+      return <GraduationCap size={22} className="text-blue-600" />;
+    }
+    if (d.includes('health') || f.includes('hospital') || f.includes('care')) {
+      return <HeartPulse size={22} className="text-rose-600" />;
+    }
+    if (d.includes('fintech') || f.includes('lending') || f.includes('loan') || f.includes('payflex')) {
+      return <CreditCard size={22} className="text-purple-600" />;
+    }
+    if (d.includes('bank') || f.includes('bank')) {
+      return <Landmark size={22} className="text-emerald-600" />;
+    }
+    return <Building2 size={22} className="text-slate-600" />;
+  };
+
+  const getStatusBadge = (status) => {
+    const st = (status || 'ACTIVE').toUpperCase();
+    if (st === 'ACTIVE') {
+      return (
+        <span className="badge badge-active flex-center gap-1">
+          <CheckCircle2 size={13} /> ACTIVE
+        </span>
+      );
+    }
+    if (st === 'REVOKED' || st === 'WITHDRAWN') {
+      return (
+        <span className="badge badge-revoked flex-center gap-1">
+          <XCircle size={13} /> WITHDRAWN
+        </span>
+      );
+    }
+    if (st === 'EXPIRED') {
+      return (
+        <span className="badge badge-notice flex-center gap-1">
+          <Clock size={13} /> EXPIRED
+        </span>
+      );
+    }
+    return (
+      <span className="badge badge-notice flex-center gap-1">
+        ● {st}
+      </span>
+    );
   };
 
   return (
@@ -50,60 +106,70 @@ export const ActiveConsentsView = () => {
       {/* Banner */}
       <div className="page-banner">
         <div className="banner-content">
-          <h1>{t('activeConsentsTitle')}</h1>
-          <p>{t('activeConsentsSub')}</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+            <span className="badge badge-verified">
+              <CheckCircle2 size={13} /> Section 6 Active Consent Registry
+            </span>
+          </div>
+          <h1>Active Consents & Fiduciary Permissions</h1>
+          <p>
+            Review all currently granted data access authorizations, track statutory validity periods, and exercise your right to withdraw consent at any time.
+          </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '16px' }}>
-          <div style={{ background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '14px 24px', borderRadius: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: '0.76rem', color: '#34d399', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('navActiveConsents')}</div>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#ffffff', marginTop: '2px' }}>{activeCount}</div>
+        <div className="active-stats-row">
+          <div className="stat-metric-pill stat-emerald">
+            <span className="stat-metric-label">Active</span>
+            <span className="stat-metric-val">{activeCount}</span>
           </div>
 
-          <div style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '14px 24px', borderRadius: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: '0.76rem', color: '#f87171', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Revoked</div>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#ffffff', marginTop: '2px' }}>{revokedCount}</div>
+          <div className="stat-metric-pill stat-rose">
+            <span className="stat-metric-label">Withdrawn</span>
+            <span className="stat-metric-val">{revokedCount}</span>
           </div>
         </div>
       </div>
 
       {/* Filter & Search Toolbar */}
-      <div style={{ display: 'flex', gap: '20px', marginBottom: '32px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255, 255, 255, 0.04)', border: '1px solid var(--border-color)', borderRadius: '14px', padding: '10px 20px', flex: 1, maxWidth: '440px' }}>
-          <Search size={18} style={{ color: 'var(--text-muted)' }} />
+      <div className="consent-filter-toolbar">
+        <div className="search-input-box">
+          <Search size={18} className="search-icon" />
           <input 
             type="text"
-            placeholder="Search fiduciary, consent ID, or purpose..."
+            placeholder="Search fiduciary name, consent ID, or purpose..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', width: '100%', outline: 'none', fontSize: '0.92rem' }}
+            className="search-text-input"
           />
         </div>
 
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="status-filter-pills">
           <button 
+            type="button"
             className={`btn btn-sm ${filterStatus === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setFilterStatus('ALL')}
           >
-            All Consents ({activeConsents.length})
+            All ({activeConsents.length})
           </button>
           <button 
+            type="button"
             className={`btn btn-sm ${filterStatus === 'ACTIVE' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setFilterStatus('ACTIVE')}
           >
             Active ({activeCount})
           </button>
           <button 
+            type="button"
             className={`btn btn-sm ${filterStatus === 'REVOKED' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setFilterStatus('REVOKED')}
           >
-            Revoked ({revokedCount})
+            Withdrawn ({revokedCount})
           </button>
         </div>
       </div>
 
       {/* Grid of Consents */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '24px' }}>
+      <div className="consents-cards-grid">
         {filteredConsents.map((consent, cardIdx) => {
           const isActive = consent.status === 'ACTIVE';
           const consentId = consent.consentId || consent.consent_id || `CNST-REC-${cardIdx}`;
@@ -112,54 +178,45 @@ export const ActiveConsentsView = () => {
             : (typeof consent.granted_attributes === 'string' ? JSON.parse(consent.granted_attributes || '[]') : (consent.granted_attributes || []));
           const noticeId = consent.noticeId || consent.notice_id || 'NTC-GENERAL';
           const grantedDate = consent.grantedOn || consent.granted_on;
+          const expiresDate = consent.expiresOn || consent.expires_on;
 
           return (
             <div 
               key={consentId} 
-              className="glass-card"
-              style={{ 
-                borderLeft: isActive ? '4px solid #10b981' : '4px solid #ef4444',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-                padding: '28px 32px'
-              }}
+              className={`glass-card consent-record-card ${isActive ? 'card-border-active' : 'card-border-revoked'}`}
             >
               <div>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                    <div style={{ fontSize: '2.2rem', width: '52px', height: '52px', borderRadius: '14px', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {consent.fiduciaryLogo || consent.fiduciary_logo || '🏛️'}
+                <div className="record-card-header">
+                  <div className="record-fiduciary-identity">
+                    <div className="sector-icon-box">
+                      {getSectorIcon(consent.domain, consent.fiduciary || consent.fiduciary_name)}
                     </div>
                     <div>
-                      <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      <h3 className="record-fiduciary-title">
                         {consent.fiduciary || consent.fiduciary_name}
                       </h3>
-                      <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                      <span className="record-fiduciary-sub">
                         {consent.fiduciaryCategory || consent.fiduciary_category || 'Corporate Entity'} • Notice {noticeId}
-                      </div>
+                      </span>
                     </div>
                   </div>
 
-                  <span className={`badge ${isActive ? 'badge-active' : 'badge-revoked'}`}>
-                    {isActive ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-                    {consent.status}
-                  </span>
+                  {getStatusBadge(consent.status)}
                 </div>
 
                 {/* Purpose */}
-                <p style={{ fontSize: '0.92rem', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: '1.6' }}>
+                <p className="record-purpose-text">
                   {consent.purpose}
                 </p>
 
                 {/* Granted Attributes Tags */}
-                <div style={{ marginBottom: '20px' }}>
-                  <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-                    {t('grantedAttrs')} ({grantedAttrs.length}):
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                <div className="granted-attrs-section">
+                  <span className="granted-attrs-label">
+                    Authorized Data Fields ({grantedAttrs.length}):
+                  </span>
+                  <div className="attrs-pills-wrap">
                     {grantedAttrs.map((attr, idx) => (
-                      <span key={idx} style={{ background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.25)', color: '#6ee7b7', padding: '3px 10px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600 }}>
+                      <span key={idx} className="attr-pill-granted">
                         ✓ {attr}
                       </span>
                     ))}
@@ -167,40 +224,42 @@ export const ActiveConsentsView = () => {
                 </div>
 
                 {/* Metadata Row */}
-                <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border-color)' }}>
-                  <span>{t('grantedOn')}: {grantedDate ? new Date(grantedDate).toLocaleDateString() : 'Active'}</span>
-                  <span>Consent ID: <code style={{ color: '#60a5fa' }}>{consentId}</code></span>
+                <div className="record-meta-footer">
+                  <span>Granted: {grantedDate ? new Date(grantedDate).toLocaleDateString() : 'Active'}</span>
+                  {expiresDate && <span>Expires: {new Date(expiresDate).toLocaleDateString()}</span>}
+                  <span>Consent ID: <code className="code-accent">{consentId}</code></span>
                 </div>
               </div>
 
               {/* Action Toolbar */}
-              <div style={{ display: 'flex', gap: '14px', marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+              <div className="record-actions-row">
                 {isActive ? (
                   <button 
+                    type="button"
                     className="btn btn-outline-danger btn-sm"
-                    style={{ flex: 1, padding: '10px 16px', fontSize: '0.88rem' }}
+                    style={{ flex: 1 }}
                     onClick={() => setRevokingConsentId(consentId)}
                   >
                     <XCircle size={15} />
-                    {t('revokeBtn')}
+                    <span>Withdraw Consent</span>
                   </button>
                 ) : (
-                  <div style={{ flex: 1, fontSize: '0.85rem', color: '#f87171', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div className="revoked-info-tag">
                     <XCircle size={15} />
-                    Revoked on {consent.revokedOn || consent.revoked_on ? new Date(consent.revokedOn || consent.revoked_on).toLocaleDateString() : 'Previous date'}
+                    <span>Withdrawn under DPDP Sec 6(4)</span>
                   </div>
                 )}
 
                 <button 
+                  type="button"
                   className="btn btn-secondary btn-sm"
-                  style={{ padding: '10px 16px', fontSize: '0.88rem' }}
                   onClick={() => {
                     setGrievanceTarget(consent);
                     setGrievanceModalOpen(true);
                   }}
                 >
                   <HelpCircle size={15} />
-                  {t('fileGrievanceBtn')}
+                  <span>File Grievance</span>
                 </button>
               </div>
             </div>
@@ -209,11 +268,11 @@ export const ActiveConsentsView = () => {
       </div>
 
       {filteredConsents.length === 0 && (
-        <div className="glass-card" style={{ textAlign: 'center', padding: '56px 24px' }}>
-          <ShieldAlert size={48} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
-          <h3 style={{ fontSize: '1.2rem', color: 'white', marginBottom: '8px' }}>No Matching Consents Found</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
-            Try adjusting your search criteria or switch scenario from the top simulator bar.
+        <div className="glass-card state-card-empty">
+          <ShieldAlert size={44} className="text-slate-400" style={{ margin: '0 auto 12px auto' }} />
+          <h3>No Matching Consents Found</h3>
+          <p>
+            No active or historical consents match your search filter. New consents granted from the Dashboard will automatically appear here.
           </p>
         </div>
       )}
@@ -223,41 +282,41 @@ export const ActiveConsentsView = () => {
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header">
-              <div className="modal-title" style={{ color: '#ef4444' }}>
-                <XCircle size={24} /> Statutory Consent Revocation
+              <div className="modal-title text-red-500">
+                <XCircle size={22} />
+                <span>Statutory Consent Withdrawal (Sec 6(4))</span>
               </div>
               <button className="close-btn" onClick={() => setRevokingConsentId(null)}>✕</button>
             </div>
 
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: '1.65' }}>
-              Under Section 6(4) of the DPDP Act 2023, you are revoking consent ID <strong>{revokingConsentId}</strong>. 
-              The Data Fiduciary will be immediately instructed to cease data processing and erase non-statutory records.
+            <p className="modal-lead-text">
+              Under Section 6(4) of the Digital Personal Data Protection Act 2023, you have the absolute legal right to withdraw consent for ID <strong>{revokingConsentId}</strong>. 
+              The Data Fiduciary will be officially notified to immediately cease processing.
             </p>
 
             <form onSubmit={handleRevokeSubmit}>
-              <div style={{ marginBottom: '24px' }}>
-                <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                  Revocation Reason / Feedback for Audit Log:
+              <div style={{ marginBottom: '20px' }}>
+                <label className="remark-label">
+                  Reason for Withdrawal (Recorded in Audit Log):
                 </label>
                 <select 
-                  className="btn-secondary"
-                  style={{ width: '100%', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                  className="input-text-field"
                   value={revokeReason}
                   onChange={(e) => setRevokeReason(e.target.value)}
                 >
-                  <option value="User exercised right to withdraw consent under DPDP Act">Exercising DPDP Right to Withdraw Consent</option>
-                  <option value="Purpose of processing is completed">Purpose of processing is completed</option>
-                  <option value="Privacy concerns regarding data sharing">Privacy concerns regarding data sharing</option>
-                  <option value="No longer using this service/institution">No longer using this service/institution</option>
+                  <option value="User exercised right to withdraw consent under DPDP Act">Exercising statutory right to withdraw consent</option>
+                  <option value="Purpose of data processing has concluded">Purpose of processing has concluded</option>
+                  <option value="Privacy concerns regarding data sharing">Privacy concerns regarding data retention</option>
+                  <option value="No longer using services of this institution">No longer using services of this institution</option>
                 </select>
               </div>
 
-              <div style={{ display: 'flex', gap: '14px', justifyContent: 'flex-end' }}>
+              <div className="modal-footer-row">
                 <button type="button" className="btn btn-secondary" onClick={() => setRevokingConsentId(null)}>
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-danger">
-                  Confirm Revocation
+                  Confirm Statutory Withdrawal
                 </button>
               </div>
             </form>

@@ -3,11 +3,11 @@ import {
   MOCK_SCENARIOS, 
   INITIAL_ACTIVE_CONSENTS, 
   INITIAL_AUDIT_LOGS,
-  INITIAL_NOMINEE,
   INITIAL_DSR_REQUESTS
 } from '../mock/initialData';
 import { INDIC_LANGUAGES, getTranslation } from '../i18n/translations';
 import { consentApi } from '../api/consentApi';
+import { useAuth } from './AuthContext';
 
 const ConsentContext = createContext();
 
@@ -85,17 +85,36 @@ export const ConsentProvider = ({ children }) => {
     return MOCK_SCENARIOS[0].id;
   });
 
-  const [activeTab, setActiveTab] = useState('incoming'); // 'incoming', 'email-sim', 'active', 'audit', 'rights'
+  const [activeTab, setActiveTab] = useState('dashboard');
+
+
+  // Authoritative list of consent requests belonging to logged-in user
+  const [myConsentRequests, setMyConsentRequests] = useState([]);
+  const [myPendingRequests, setMyPendingRequests] = useState([]);
+  const [isFetchingPending, setIsFetchingPending] = useState(false);
+  const [pendingError, setPendingError] = useState(null);
 
   // Current scenario object (source of truth for fiduciary, purpose & data principal)
   const currentScenario = scenarios.find(s => s.id === activeScenarioId || s.token === activeScenarioId || s.noticeId === activeScenarioId) || scenarios[0];
 
-  // Dynamic Data Principal derived directly from the active consent request email
-  const dataPrincipal = currentScenario?.dataPrincipal || {
+  const auth = useAuth();
+  const authUser = auth?.user;
+
+  // Dynamic Data Principal derived directly from authenticated user or active consent request
+  const dataPrincipal = (authUser && authUser.role === 'DATA_PRINCIPAL') ? {
+    id: authUser.data_principal_id || authUser.dp_id || currentScenario?.dataPrincipal?.id || "DP-2026-00000",
+    name: authUser.name || currentScenario?.dataPrincipal?.name || "Data Principal",
+    email: authUser.email || currentScenario?.dataPrincipal?.email || "principal@example.com",
+    phone: currentScenario?.dataPrincipal?.phone || "+91 98765 12345",
+    rollNo: currentScenario?.dataPrincipal?.rollNo || "CIALFOR-DP-2026",
+    institution: currentScenario?.dataPrincipal?.institution || "Cialfor Partner Institution",
+    kycStatus: currentScenario?.dataPrincipal?.kycStatus || "Verified",
+    registeredOn: authUser.created_at || currentScenario?.dataPrincipal?.registeredOn || "2026-09-01"
+  } : (currentScenario?.dataPrincipal || {
     id: "DP-2026-DYNAMIC",
     name: "Data Principal",
     email: "principal@example.com"
-  };
+  });
 
   // Language State for DPDP Act Section 5(3) Multilingual Support
   const [language, setLanguageState] = useState(() => {
@@ -109,9 +128,9 @@ export const ConsentProvider = ({ children }) => {
 
   const t = (key) => getTranslation(language, key);
 
-  // Theme State: 'dark' or 'light'
+  // Theme State: 'light' default for modern enterprise compliance style
   const [theme, setThemeState] = useState(() => {
-    return localStorage.getItem('dp_theme') || 'dark';
+    return localStorage.getItem('dp_theme') || 'light';
   });
 
   const setTheme = (newTheme) => {
@@ -137,37 +156,21 @@ export const ConsentProvider = ({ children }) => {
   const [selectedAttributes, setSelectedAttributes] = useState({});
 
   // Active given consents list
-  const [activeConsents, setActiveConsents] = useState(() => {
-    const saved = localStorage.getItem('dp_active_consents');
-    return saved ? JSON.parse(saved) : INITIAL_ACTIVE_CONSENTS;
-  });
+  // NOTE: Do NOT seed from localStorage here — stale data from a previous
+  // session would be shown to the newly-logged-in user before the backend
+  // fetch completes. The backend fetch is always the authoritative source;
+  // localStorage is written after fetch for persistence across page refreshes
+  // within the same session, not across separate login sessions.
+  const [activeConsents, setActiveConsents] = useState(INITIAL_ACTIVE_CONSENTS);
 
   // Audit logs list
-  const [auditLogs, setAuditLogs] = useState(() => {
-    const saved = localStorage.getItem('dp_audit_logs');
-    return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
-  });
+  const [auditLogs, setAuditLogs] = useState(INITIAL_AUDIT_LOGS);
 
   // Nominee state (Section 14)
-  const [nominee, setNomineeState] = useState(() => {
-    const saved = localStorage.getItem('dp_nominee');
-    if (!saved) return null;
-    try {
-      const parsed = JSON.parse(saved);
-      if (parsed?.nomineeName === "Rajesh Sharma" && parsed?.dateDesignated === "2025-08-20") {
-        return null;
-      }
-      return parsed;
-    } catch {
-      return null;
-    }
-  });
+  const [nominee, setNomineeState] = useState(null);
 
   // DSR Requests List (Sections 11-14)
-  const [dsrRequests, setDsrRequests] = useState(() => {
-    const saved = localStorage.getItem('dp_dsr_requests');
-    return saved ? JSON.parse(saved) : INITIAL_DSR_REQUESTS;
-  });
+  const [dsrRequests, setDsrRequests] = useState(INITIAL_DSR_REQUESTS);
 
   const [nominationModalOpen, setNominationModalOpen] = useState(false);
   const [latestReceipt, setLatestReceipt] = useState(null);
@@ -175,7 +178,9 @@ export const ConsentProvider = ({ children }) => {
   const [grievanceTarget, setGrievanceTarget] = useState(null);
   const [toastMessage, setToastMessage] = useState(null);
 
-  // Function to refetch live data from Python FastAPI backend
+  // Function to refetch live data from Python FastAPI backend.
+  // Only runs when a user is authenticated — guarded by authUser check
+  // at the call site to prevent unauthenticated API calls on boot.
   const refetchBackendData = useCallback(async () => {
     try {
       setApiError(null);
@@ -214,6 +219,39 @@ export const ConsentProvider = ({ children }) => {
         setNomineeState(fetchedNominee);
       }
 
+      // ── PART 4: AUTOMATIC GMAIL DISCOVERY VIA /api/me/consent-requests ──
+      setIsFetchingPending(true);
+      setPendingError(null);
+      try {
+        const myReqs = await consentApi.fetchMyConsentRequests();
+        if (myReqs && Array.isArray(myReqs)) {
+          setMyConsentRequests(myReqs);
+          const pending = myReqs.filter(r => (r.status || '').toUpperCase() === 'PENDING');
+          setMyPendingRequests(pending);
+
+          const formattedMyReqs = myReqs.map(formatBackendResponseToScenario).filter(Boolean);
+          if (formattedMyReqs.length > 0) {
+            setScenarios(prev => {
+              const combined = [...prev];
+              formattedMyReqs.forEach(item => {
+                const idx = combined.findIndex(s => s.id === item.id || s.token === item.token || s.noticeId === item.noticeId);
+                if (idx >= 0) {
+                  combined[idx] = item;
+                } else {
+                  combined.unshift(item);
+                }
+              });
+              return combined;
+            });
+          }
+        }
+      } catch (meErr) {
+        console.warn('Failed to fetch personal consent requests:', meErr);
+        setPendingError('Unable to load consent requests. Please try again.');
+      } finally {
+        setIsFetchingPending(false);
+      }
+
       // Fetch all Consent Requests from Backend and hydrate scenarios list
       const fetchedRequests = await consentApi.fetchConsentRequests();
       if (fetchedRequests && Array.isArray(fetchedRequests) && fetchedRequests.length > 0) {
@@ -237,10 +275,86 @@ export const ConsentProvider = ({ children }) => {
     }
   }, [dataPrincipal.id, dataPrincipal.email]);
 
-  // Initial sync with backend API
+  // Sync backend data whenever the authenticated user changes (login / session
+  // restore / logout). On logout authUser becomes null so we reset local state
+  // to clean defaults instead of fetching.
+  const authUserId = authUser?.id || null;
   useEffect(() => {
-    refetchBackendData();
-  }, [refetchBackendData]);
+    if (authUserId) {
+      // User is authenticated — ensure role-based landing tab is dashboard
+      setActiveTab('dashboard');
+      refetchBackendData();
+    } else {
+      // No user — reset all session-specific state to clean defaults so
+      // the login screen and any subsequent login start completely fresh.
+      setActiveConsents(INITIAL_ACTIVE_CONSENTS);
+      setAuditLogs(INITIAL_AUDIT_LOGS);
+      setDsrRequests(INITIAL_DSR_REQUESTS);
+      setNomineeState(null);
+      setScenarios(MOCK_SCENARIOS);
+      setMyConsentRequests([]);
+      setMyPendingRequests([]);
+      setActiveTab('dashboard');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUserId]);
+
+  // Periodic background polling: ensures newly arrived Gmail requests automatically appear on dashboard
+  useEffect(() => {
+    if (!authUserId) return;
+    const pollInterval = setInterval(() => {
+      consentApi.fetchMyConsentRequests().then(myReqs => {
+        if (myReqs && Array.isArray(myReqs)) {
+          setMyConsentRequests(myReqs);
+          const pending = myReqs.filter(r => (r.status || '').toUpperCase() === 'PENDING');
+          setMyPendingRequests(pending);
+
+          const formattedMyReqs = myReqs.map(formatBackendResponseToScenario).filter(Boolean);
+          if (formattedMyReqs.length > 0) {
+            setScenarios(prev => {
+              const combined = [...prev];
+              formattedMyReqs.forEach(item => {
+                const idx = combined.findIndex(s => s.id === item.id || s.token === item.token || s.noticeId === item.noticeId);
+                if (idx >= 0) {
+                  combined[idx] = item;
+                } else {
+                  combined.unshift(item);
+                }
+              });
+              return combined;
+            });
+          }
+        }
+      }).catch(() => {
+        // Silent catch for background poll to avoid intrusive error banners
+      });
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, [authUserId]);
+
+  // Popstate navigation listener: synchronizes browser back/forward buttons with tab & scenario state
+  useEffect(() => {
+    const handlePopState = () => {
+      const pathname = window.location.pathname;
+      const pathTokenMatch = pathname.match(/\/request\/([^/]+)/);
+      const pathToken = pathTokenMatch ? pathTokenMatch[1] : null;
+
+      const params = new URLSearchParams(window.location.search);
+      const tokenParam = params.get('token') || pathToken;
+
+      if (tokenParam) {
+        setActiveScenarioId(tokenParam);
+        setActiveTab('incoming');
+      } else {
+        setActiveTab('dashboard');
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
 
   // Async token resolution effect from backend Python REST API
   useEffect(() => {
@@ -265,7 +379,9 @@ export const ConsentProvider = ({ children }) => {
     if (purposeParam) queryObj.purpose = purposeParam;
     if (fiduciaryParam) queryObj.fiduciary = fiduciaryParam;
 
-    const targetToken = tokenParam || 'tok_pf_account';
+    // Only query backend if an explicit token parameter was provided and user is authenticated
+    if (!tokenParam || !authUserId) return;
+    const targetToken = tokenParam;
 
     consentApi.getConsentRequestByToken(targetToken, queryObj).then((res) => {
       if (res && (res.id || res.token)) {
@@ -341,6 +457,37 @@ export const ConsentProvider = ({ children }) => {
   const switchScenario = (scenarioId) => {
     setActiveScenarioId(scenarioId);
     setActiveTab('incoming');
+  };
+
+  // Dedicated helper to open review for any request token/ID
+  const openRequestReview = async (tokenOrId) => {
+    if (!tokenOrId) return;
+    setLoading(true);
+    try {
+      const existing = scenarios.find(s => s.token === tokenOrId || s.id === tokenOrId || s.noticeId === tokenOrId);
+      if (existing) {
+        setActiveScenarioId(existing.id);
+      } else {
+        const fetched = await consentApi.getConsentRequestByToken(tokenOrId);
+        if (fetched) {
+          const formatted = formatBackendResponseToScenario(fetched);
+          if (formatted) {
+            setScenarios(prev => [formatted, ...prev.filter(s => s.id !== formatted.id)]);
+            setActiveScenarioId(formatted.id);
+          }
+        }
+      }
+      try {
+        window.history.pushState({}, '', `/request/${tokenOrId}`);
+      } catch (histErr) {
+        console.warn("Could not update history state:", histErr);
+      }
+      setActiveTab('incoming');
+    } catch (err) {
+      console.warn("Failed to open request review:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Grant Consent API trigger
@@ -450,17 +597,22 @@ export const ConsentProvider = ({ children }) => {
   // Revoke Consent API trigger
   const revokeConsent = async (consentId, reason = '') => {
     setLoading(true);
+    const revokeReasonText = reason || 'Consent withdrawn by Data Principal under DPDP Act Sec 6(4)';
+    const revokePayload = { reason: revokeReasonText };
+
     try {
-      await consentApi.revokeConsent(consentId, reason);
-      
-      // Immediately update status to REVOKED in local activeConsents
+      // 1. Immediately update status to REVOKED in local activeConsents for instant UI responsiveness
       setActiveConsents(prev => prev.map(c => {
         if ((c.consentId || c.consent_id) === consentId) {
-          return { ...c, status: 'REVOKED', revokedOn: new Date().toISOString(), revocationReason: reason };
+          return { ...c, status: 'REVOKED', revokedOn: new Date().toISOString(), revocationReason: revokeReasonText };
         }
         return c;
       }));
 
+      // 2. Call backend API with structured payload
+      await consentApi.revokeConsent(consentId, revokePayload);
+
+      // 3. Re-sync with backend database
       await refetchBackendData();
 
       setToastMessage({
@@ -469,9 +621,10 @@ export const ConsentProvider = ({ children }) => {
       });
     } catch (err) {
       console.error('Revoke consent failed:', err);
+      const msg = typeof err?.message === 'string' ? err.message : 'Failed to revoke consent.';
       setToastMessage({
         type: 'error',
-        text: err.message || 'Failed to revoke consent.'
+        text: msg
       });
     } finally {
       setLoading(false);
@@ -718,7 +871,12 @@ export const ConsentProvider = ({ children }) => {
     setToastMessage,
     loading,
     apiError,
-    refetchBackendData
+    refetchBackendData,
+    myConsentRequests,
+    myPendingRequests,
+    isFetchingPending,
+    pendingError,
+    openRequestReview
   };
 
   return (

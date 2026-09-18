@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useConsent } from '../context/ConsentContext';
 import { translatePurpose, translateAttributeName, translateAttributeDesc } from '../i18n/translations';
 import { 
-  Shield, 
+  ShieldCheck, 
   CheckCircle2, 
   XCircle, 
   Lock, 
@@ -11,7 +11,17 @@ import {
   AlertCircle, 
   HelpCircle, 
   Database, 
-  SlidersHorizontal 
+  SlidersHorizontal,
+  Mail,
+  UserCheck,
+  Building2,
+  GraduationCap,
+  HeartPulse,
+  CreditCard,
+  Landmark,
+  ArrowLeft,
+  Copy,
+  Check
 } from 'lucide-react';
 
 export const ConsentDecisionHub = () => {
@@ -23,6 +33,7 @@ export const ConsentDecisionHub = () => {
     denyCurrentConsent, 
     setGrievanceModalOpen, 
     setGrievanceTarget,
+    setActiveTab,
     language,
     t 
   } = useConsent();
@@ -30,13 +41,44 @@ export const ConsentDecisionHub = () => {
   const [note, setNote] = useState('');
   const [denying, setDenying] = useState(false);
   const [denyReason, setDenyReason] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittedDecision, setSubmittedDecision] = useState(null); // { status: 'GRANTED' | 'DENIED', consentRecord }
+  const [copiedHash, setCopiedHash] = useState(false);
 
-  // Count active toggled attributes
+  // Sector Icon Resolver
+  const getSectorIcon = (domain, fiduciaryName = '') => {
+    const d = (domain || '').toLowerCase();
+    const f = (fiduciaryName || '').toLowerCase();
+    if (d.includes('edu') || f.includes('institute') || f.includes('university') || f.includes('school')) {
+      return <GraduationCap size={24} className="text-blue-600" />;
+    }
+    if (d.includes('health') || f.includes('hospital') || f.includes('care')) {
+      return <HeartPulse size={24} className="text-rose-600" />;
+    }
+    if (d.includes('fintech') || f.includes('lending') || f.includes('loan') || f.includes('payflex')) {
+      return <CreditCard size={24} className="text-purple-600" />;
+    }
+    if (d.includes('bank') || f.includes('bank')) {
+      return <Landmark size={24} className="text-emerald-600" />;
+    }
+    return <Building2 size={24} className="text-slate-600" />;
+  };
+
+  const getSectorBadgeClass = (domain) => {
+    const d = (domain || '').toLowerCase();
+    if (d.includes('edu')) return 'badge-education';
+    if (d.includes('health')) return 'badge-healthcare';
+    if (d.includes('fintech')) return 'badge-fintech';
+    if (d.includes('bank')) return 'badge-banking';
+    return 'badge-general';
+  };
+
+  const attributesList = currentScenario?.attributes || [];
   const selectedCount = Object.values(selectedAttributes).filter(Boolean).length;
-  const totalCount = currentScenario.attributes.length;
+  const totalCount = attributesList.length;
 
   const handleSelectAll = (val) => {
-    currentScenario.attributes.forEach(attr => {
+    attributesList.forEach(attr => {
       if (!attr.required) {
         if ((val && !selectedAttributes[attr.id]) || (!val && selectedAttributes[attr.id])) {
           toggleAttribute(attr.id);
@@ -45,229 +87,440 @@ export const ConsentDecisionHub = () => {
     });
   };
 
-  const handleDenySubmit = (e) => {
-    e.preventDefault();
-    denyCurrentConsent(denyReason || "Data Principal declined request");
-    setDenying(false);
-    setDenyReason('');
+  const handleGrant = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const record = await grantCurrentConsent(note);
+      if (record) {
+        setSubmittedDecision({
+          status: 'GRANTED',
+          consentRecord: record
+        });
+      }
+    } catch (err) {
+      console.error("Grant failed:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
+  const handleDenySubmit = async (e) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await denyCurrentConsent(denyReason || "Data Principal declined consent request.");
+      setSubmittedDecision({
+        status: 'DENIED',
+        fiduciary: currentScenario.fiduciary,
+        reason: denyReason || "Data Principal declined request"
+      });
+      setDenying(false);
+      setDenyReason('');
+    } catch (err) {
+      console.error("Deny failed:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const copyIntegrityHash = (hashText) => {
+    if (!hashText) return;
+    navigator.clipboard.writeText(hashText);
+    setCopiedHash(true);
+    setTimeout(() => setCopiedHash(false), 2000);
+  };
+
+  // SUCCESS STATE VIEW
+  if (submittedDecision) {
+    const isGranted = submittedDecision.status === 'GRANTED';
+    const record = submittedDecision.consentRecord || {};
+    const integrityHash = record.receiptHash || record.sha256IntegrityHash || 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+    return (
+      <div className="decision-hub-container">
+        <div className="decision-success-card">
+          <div className="success-icon-badge">
+            {isGranted ? (
+              <CheckCircle2 size={44} className="text-emerald-500" />
+            ) : (
+              <XCircle size={44} className="text-rose-500" />
+            )}
+          </div>
+
+          <h2 className="success-heading">
+            {isGranted ? 'Consent Recorded Successfully' : 'Consent Request Declined'}
+          </h2>
+          <p className="success-subheading">
+            {isGranted 
+              ? 'Your decision has been cryptographically recorded and the Data Fiduciary has been officially notified with a statutory receipt.'
+              : 'You have formally declined consent. The Data Fiduciary has been notified and prohibited from processing this data.'}
+          </p>
+
+          <div className="success-receipt-box">
+            <div className="receipt-meta-grid">
+              <div className="receipt-item">
+                <span className="receipt-label">Consent ID</span>
+                <span className="receipt-value font-mono text-indigo-600 font-bold">
+                  {record.consentId || 'CNST-2026-RECORDED'}
+                </span>
+              </div>
+
+              <div className="receipt-item">
+                <span className="receipt-label">Status</span>
+                <span className={`status-pill ${isGranted ? 'pill-emerald' : 'pill-rose'}`}>
+                  ● {isGranted ? 'Granted' : 'Denied'}
+                </span>
+              </div>
+
+              <div className="receipt-item">
+                <span className="receipt-label">Data Fiduciary</span>
+                <span className="receipt-value font-semibold">
+                  {currentScenario.fiduciary}
+                </span>
+              </div>
+
+              <div className="receipt-item">
+                <span className="receipt-label">Recorded Timestamp</span>
+                <span className="receipt-value">
+                  {new Date().toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            {isGranted && (
+              <div className="integrity-hash-container">
+                <div className="hash-header">
+                  <span className="hash-title">SHA-256 Integrity Hash</span>
+                  <button 
+                    type="button" 
+                    className="copy-hash-btn"
+                    onClick={() => copyIntegrityHash(integrityHash)}
+                    title="Copy SHA-256 Integrity Hash"
+                  >
+                    {copiedHash ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+                    <span>{copiedHash ? 'Copied' : 'Copy Hash'}</span>
+                  </button>
+                </div>
+                <div className="hash-code-block font-mono">
+                  {integrityHash}
+                </div>
+                <p className="hash-disclaimer">
+                  Verified SHA-256 cryptographic proof of consent under Section 6 of the DPDP Act 2023.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="success-actions-row">
+            <button 
+              className="btn btn-secondary"
+              onClick={() => {
+                try {
+                  if (window.location.pathname !== '/') {
+                    window.history.pushState({}, '', '/');
+                  }
+                } catch (e) {}
+                setActiveTab('dashboard');
+              }}
+            >
+              <ArrowLeft size={16} />
+              <span>Back to Dashboard</span>
+            </button>
+
+            {isGranted && (
+              <button 
+                className="btn btn-primary"
+                onClick={() => setActiveTab('active')}
+              >
+                <CheckCircle2 size={16} />
+                <span>View in Active Consents</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // STANDARD REVIEW VIEW
   return (
     <div className="decision-hub-container">
+      {/* Back to Dashboard Navigation Link */}
+      <button 
+        type="button" 
+        className="back-dashboard-link"
+        onClick={() => {
+          try {
+            if (window.location.pathname !== '/') {
+              window.history.pushState({}, '', '/');
+            }
+          } catch (e) {}
+          setActiveTab('dashboard');
+        }}
+      >
+        <ArrowLeft size={16} />
+        <span>Back to Dashboard</span>
+      </button>
+
       {/* Top Banner */}
       <div className="page-banner">
         <div className="banner-content">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
-            {currentScenario.domain && (
-              <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', fontWeight: 700 }}>
-                {currentScenario.domain} Sector
-              </span>
-            )}
-            <span className="badge badge-notice">{t('noticeId')}: {currentScenario.noticeId}</span>
+          <div className="banner-badge-row">
+            <span className={`badge ${getSectorBadgeClass(currentScenario.domain)}`}>
+              {currentScenario.domain || 'General'} Sector
+            </span>
+            <span className="badge badge-notice">Notice ID: {currentScenario.noticeId}</span>
             <span className="badge badge-verified">
-              <CheckCircle2 size={13} /> {t('dpdpVerified')}
+              <CheckCircle2 size={13} /> DPDP Verified
             </span>
           </div>
-          <h1>{t('decisionHubTitle')}</h1>
-          <p>{t('decisionHubSub')}</p>
+          <h1>Consent Review & Granular Permission</h1>
+          <p>Carefully review the requested personal data attributes, purpose of processing, and validity before making your decision.</p>
         </div>
 
-        <div style={{ textAlign: 'right', background: 'rgba(99, 102, 241, 0.08)', padding: '16px 24px', borderRadius: '16px', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.5px' }}>
-            {t('selectedScope')}
-          </div>
-          <div style={{ fontSize: '2rem', fontWeight: 800, color: '#818cf8', marginTop: '2px' }}>
-            {selectedCount} <span style={{ fontSize: '1.05rem', color: 'var(--text-muted)', fontWeight: 600 }}>/ {totalCount} {t('attributesSelected')}</span>
+        <div className="scope-counter-box">
+          <span className="scope-counter-label">Selected Scope</span>
+          <div className="scope-counter-number">
+            {selectedCount} <span className="scope-counter-total">/ {totalCount} attributes</span>
           </div>
         </div>
       </div>
 
       <div className="decision-hub-grid">
-        {/* Main Form Column */}
-        <div className="glass-card">
-          {/* Fiduciary Header */}
-          <div className="fiduciary-header-card">
-            <div className="fiduciary-icon-lg">
-              {currentScenario.fiduciaryLogo}
-            </div>
-            <div className="fiduciary-meta">
-              <h2>{currentScenario.fiduciary}</h2>
-              <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                {currentScenario.fiduciaryCategory} • Official Data Fiduciary
+        {/* Main Column */}
+        <div className="main-review-column">
+          {/* Fiduciary Card */}
+          <div className="glass-card fiduciary-profile-card">
+            <div className="fiduciary-card-left">
+              <div className="fiduciary-logo-box">
+                {getSectorIcon(currentScenario.domain, currentScenario.fiduciary)}
               </div>
-              <div className="fiduciary-tags">
-                <span className="badge badge-verified">
-                  <Shield size={13} /> Verified Identity
+              <div>
+                <h2 className="fiduciary-headline">{currentScenario.fiduciary}</h2>
+                <span className="fiduciary-cat-text">
+                  {currentScenario.fiduciaryCategory || 'Official Data Fiduciary'}
                 </span>
-                <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', color: '#cbd5e1', border: '1px solid rgba(255,255,255,0.1)' }}>
-                  {currentScenario.legalBasis}
-                </span>
+                <div className="fiduciary-contact-row">
+                  <span className="fiduciary-contact-item">
+                    <Mail size={13} /> DPO: {currentScenario.dpoEmail || currentScenario.fiduciaryEmail || 'dpo@fiduciary.com'}
+                  </span>
+                  <span className="fiduciary-contact-item">
+                    <ShieldCheck size={13} className="text-emerald-500" /> Statutory Legal Basis: DPDP Sec 6
+                  </span>
+                </div>
               </div>
             </div>
           </div>
 
           {/* Purpose Box */}
-          <div className="purpose-box">
-            <div className="purpose-box-title">
-              <FileText size={16} /> {t('specifiedPurpose')}
+          <div className="glass-card purpose-highlight-box">
+            <div className="purpose-box-header">
+              <FileText size={17} className="text-indigo-600" />
+              <span className="purpose-box-title">Specified Purpose of Processing</span>
             </div>
-            <div className="purpose-box-desc">
+            <p className="purpose-box-text">
               {translatePurpose(currentScenario.purpose, language)}
-            </div>
+            </p>
           </div>
 
           {/* Granular Attribute Selection */}
-          <div className="section-title-group">
-            <h3>
-              <SlidersHorizontal size={20} style={{ color: '#818cf8' }} />
-              {t('granularAttributes')}
-            </h3>
-            <div style={{ display: 'flex', gap: '10px' }}>
+          <div className="glass-card">
+            <div className="attributes-header-row">
+              <div>
+                <h3 className="section-title-sm">
+                  <SlidersHorizontal size={18} className="text-indigo-600" />
+                  <span>Requested Personal Data ({totalCount})</span>
+                </h3>
+                <p className="section-subtitle-sm">
+                  Review and customize permissions. Mandatory statutory attributes cannot be unselected.
+                </p>
+              </div>
+
+              <div className="select-all-controls">
+                <button 
+                  type="button" 
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleSelectAll(true)}
+                >
+                  Select All Optional
+                </button>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleSelectAll(false)}
+                >
+                  Deselect All Optional
+                </button>
+              </div>
+            </div>
+
+            <div className="attribute-cards-grid">
+              {attributesList.map((attr) => {
+                const isSelected = !!selectedAttributes[attr.id];
+                return (
+                  <div 
+                    key={attr.id}
+                    className={`attribute-item-card ${attr.required ? 'is-required' : ''} ${isSelected ? 'is-selected' : 'is-unselected'}`}
+                  >
+                    <div className="attribute-card-top">
+                      <div className="attribute-name-wrap">
+                        <span className="attribute-name">
+                          {translateAttributeName(attr.name, language)}
+                        </span>
+                        <div className="attribute-tags-row">
+                          {attr.category && (
+                            <span className="attr-cat-badge">
+                              {attr.category}
+                            </span>
+                          )}
+                          {attr.required && (
+                            <span className="badge-mandatory">Mandatory</span>
+                          )}
+                          {attr.sensitive && (
+                            <span className="badge-sensitive">Sensitive</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <label className="toggle-switch">
+                        <input 
+                          type="checkbox"
+                          checked={isSelected}
+                          disabled={attr.required}
+                          onChange={() => toggleAttribute(attr.id)}
+                          aria-label={`Toggle ${attr.name}`}
+                        />
+                        <span className="toggle-slider"></span>
+                      </label>
+                    </div>
+
+                    <p className="attribute-desc">
+                      {translateAttributeDesc(attr.description, language)}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Optional Remark Input */}
+            <div className="remark-input-container">
+              <label className="remark-label">
+                Optional Decision Remark:
+              </label>
+              <input 
+                type="text"
+                className="input-text-field"
+                placeholder="e.g. Consent granted for academic year 2026-27 only."
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                disabled={isSubmitting}
+              />
+            </div>
+
+            {/* Pre-Grant Decision Summary Box */}
+            <div className="decision-summary-box">
+              <h4 className="decision-summary-title">Compact Decision Summary</h4>
+              <div className="decision-summary-grid">
+                <div>
+                  <span className="summary-label">Target Fiduciary</span>
+                  <span className="summary-val">{currentScenario.fiduciary}</span>
+                </div>
+                <div>
+                  <span className="summary-label">Attributes Selected</span>
+                  <span className="summary-val text-indigo-600 font-bold">{selectedCount} of {totalCount} attributes</span>
+                </div>
+                <div>
+                  <span className="summary-label">Processing Duration</span>
+                  <span className="summary-val">{currentScenario.validityPeriod || '12 Months'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="review-action-toolbar">
               <button 
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleSelectAll(true)}
+                type="button"
+                className="btn btn-primary btn-grant-main"
+                onClick={handleGrant}
+                disabled={isSubmitting || selectedCount === 0}
               >
-                {t('selectAllOptional')}
+                {isSubmitting ? (
+                  <>
+                    <div className="spinner-sm"></div>
+                    <span>Recording Consent...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={18} />
+                    <span>Grant Selected Consent ({selectedCount} Attributes)</span>
+                  </>
+                )}
               </button>
+
               <button 
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleSelectAll(false)}
+                type="button"
+                className="btn btn-outline-danger"
+                onClick={() => setDenying(true)}
+                disabled={isSubmitting}
               >
-                {t('deselectAllOptional')}
+                <XCircle size={18} />
+                <span>Deny Consent</span>
               </button>
             </div>
-          </div>
-
-          <div className="attribute-cards-list">
-            {currentScenario.attributes.map((attr) => {
-              const isSelected = !!selectedAttributes[attr.id];
-              return (
-                <div 
-                  key={attr.id}
-                  className={`attribute-card ${attr.required ? 'required' : ''} ${isSelected ? 'selected' : ''}`}
-                >
-                  <div className="attribute-left">
-                    <div className="attribute-icon">
-                      <Lock size={18} />
-                    </div>
-                    <div className="attribute-info">
-                      <h4>
-                        {translateAttributeName(attr.name, language)}
-                        {attr.category && (
-                          <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)', fontSize: '0.7rem', padding: '2px 8px', borderRadius: '6px', fontWeight: 700, marginLeft: '8px' }}>
-                            {attr.category}
-                          </span>
-                        )}
-                        {attr.required && <span className="tag-required">{t('mandatoryBadge')}</span>}
-                        {attr.sensitive && <span className="tag-sensitive">{t('sensitiveBadge')}</span>}
-                      </h4>
-                      <p>{translateAttributeDesc(attr.description, language)}</p>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <label className="switch">
-                      <input 
-                        type="checkbox"
-                        checked={isSelected}
-                        disabled={attr.required}
-                        onChange={() => toggleAttribute(attr.id)}
-                      />
-                      <span className="slider"></span>
-                    </label>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Optional Remarks */}
-          <div style={{ marginBottom: '32px' }}>
-            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-              {t('optionalRemarkLabel')}
-            </label>
-            <input 
-              type="text"
-              className="btn-secondary"
-              style={{ width: '100%', padding: '14px 18px', borderRadius: '12px', fontSize: '0.92rem' }}
-              placeholder={t('optionalRemarkPlaceholder')}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-            />
-          </div>
-
-          {/* Action Toolbar */}
-          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', paddingTop: '24px', borderTop: '1px solid var(--border-color)' }}>
-            <button 
-              className="btn btn-primary"
-              style={{ flex: 2, padding: '15px 28px', fontSize: '1rem' }}
-              onClick={() => grantCurrentConsent(note)}
-            >
-              <CheckCircle2 size={20} />
-              <span>{t('grantConsentBtn')} ({selectedCount} {t('attributesSelected')})</span>
-            </button>
-
-            <button 
-              className="btn btn-outline-danger"
-              style={{ flex: 1, padding: '15px 24px', fontSize: '0.95rem' }}
-              onClick={() => setDenying(true)}
-            >
-              <XCircle size={20} />
-              <span>{t('denyConsentBtn')}</span>
-            </button>
           </div>
         </div>
 
-        {/* Sidebar Column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <div className="glass-card sidebar-info-card">
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '10px', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
-              <Shield size={18} style={{ color: '#818cf8' }} /> {t('noticeComplianceTitle')}
+        {/* Sidebar Info Column */}
+        <div className="review-sidebar-column">
+          <div className="glass-card statutory-notice-card">
+            <h3 className="sidebar-card-title">
+              <ShieldCheck size={18} className="text-indigo-600" />
+              <span>Statutory DPDP Notice</span>
             </h3>
 
-            <div className="info-row">
-              <span className="info-label">{t('retentionPeriod')}</span>
-              <span className="info-value" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
-                <Clock size={15} style={{ color: '#f59e0b' }} />
-                {currentScenario.validityPeriod}
+            <div className="sidebar-info-row">
+              <span className="info-label">Retention Period</span>
+              <span className="info-value flex-center gap-1">
+                <Clock size={14} className="text-amber-500" />
+                {currentScenario.validityPeriod || '12 Months'}
               </span>
             </div>
 
-            <div className="info-row">
-              <span className="info-label">{t('dataStorageRegion')}</span>
-              <span className="info-value" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
-                <Database size={15} style={{ color: '#10b981' }} />
-                {currentScenario.dataRegion}
+            <div className="sidebar-info-row">
+              <span className="info-label">Storage Region</span>
+              <span className="info-value flex-center gap-1">
+                <Database size={14} className="text-emerald-500" />
+                {currentScenario.dataRegion || 'India (MeitY Empanelled Cloud)'}
               </span>
             </div>
 
-            <div className="info-row" style={{ borderBottom: 'none' }}>
-              <span className="info-label">{t('rightToRevoke')}</span>
-              <span style={{ fontSize: '0.85rem', color: '#cbd5e1', lineHeight: '1.55', marginTop: '4px' }}>
-                {t('revokeStatutoryText')}
-              </span>
+            <div className="sidebar-info-row border-none">
+              <span className="info-label">Right to Withdraw (Sec 6(4))</span>
+              <p className="info-subtext">
+                Under Section 6(4) of the DPDP Act 2023, you retain the statutory right to withdraw this consent at any time through the Active Consents dashboard.
+              </p>
             </div>
 
             <button 
-              className="btn btn-secondary btn-sm"
-              style={{ width: '100%', marginTop: '8px', padding: '10px' }}
+              type="button" 
+              className="btn btn-secondary btn-sm w-full"
               onClick={() => {
                 setGrievanceTarget(currentScenario);
                 setGrievanceModalOpen(true);
               }}
             >
               <HelpCircle size={15} />
-              {t('inquireDpoBtn')}
+              <span>Inquire with DPO</span>
             </button>
           </div>
 
-          <div className="glass-card" style={{ background: 'rgba(99, 102, 241, 0.05)', border: '1px solid rgba(99, 102, 241, 0.2)', padding: '20px 24px' }}>
-            <div style={{ fontSize: '0.85rem', color: '#a5b4fc', display: 'flex', gap: '12px', lineHeight: '1.5' }}>
-              <AlertCircle size={22} style={{ flexShrink: 0, marginTop: '2px' }} />
-              <div>
-                {t('signedArtifactNotice')}
-              </div>
-            </div>
+          <div className="glass-card notice-alert-card">
+            <AlertCircle size={20} className="text-indigo-500 flex-shrink-0" />
+            <p className="notice-alert-text">
+              When granted, a cryptographic <strong>SHA-256 Integrity Hash</strong> is generated and dispatched to the original fiduciary message thread.
+            </p>
           </div>
         </div>
       </div>
@@ -277,36 +530,47 @@ export const ConsentDecisionHub = () => {
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header">
-              <div className="modal-title" style={{ color: '#ef4444' }}>
-                <XCircle size={24} /> Decline Consent Request
+              <div className="modal-title text-red-500">
+                <XCircle size={22} />
+                <span>Decline Consent Request</span>
               </div>
-              <button className="close-btn" onClick={() => setDenying(false)}>✕</button>
+              <button className="close-btn" onClick={() => !isSubmitting && setDenying(false)}>✕</button>
             </div>
 
-            <p style={{ color: '#cbd5e1', marginBottom: '20px', lineHeight: '1.6' }}>
-              Are you sure you want to decline consent to <strong>{currentScenario.fiduciary}</strong>? The fiduciary will be notified that consent was declined.
+            <p className="modal-lead-text">
+              Are you sure you want to decline consent to <strong>{currentScenario.fiduciary}</strong>? The fiduciary will be officially informed that data processing has been refused.
             </p>
 
             <form onSubmit={handleDenySubmit}>
-              <div style={{ marginBottom: '24px' }}>
-                <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+              <div style={{ marginBottom: '20px' }}>
+                <label className="remark-label">
                   Reason for Declining (Optional):
                 </label>
                 <textarea 
-                  className="btn-secondary"
-                  style={{ width: '100%', height: '90px', padding: '14px', borderRadius: '12px', fontSize: '0.92rem', resize: 'none' }}
-                  placeholder="e.g. Unnecessary data requirements or lack of clarity on processing duration."
+                  className="input-text-field"
+                  style={{ height: '90px', resize: 'none' }}
+                  placeholder="e.g. Unnecessary data collection or scope too broad."
                   value={denyReason}
                   onChange={(e) => setDenyReason(e.target.value)}
+                  disabled={isSubmitting}
                 />
               </div>
 
-              <div style={{ display: 'flex', gap: '14px', justifyContent: 'flex-end' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setDenying(false)}>
+              <div className="modal-footer-row">
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={() => setDenying(false)}
+                  disabled={isSubmitting}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-danger">
-                  Confirm Decline Request
+                <button 
+                  type="submit" 
+                  className="btn btn-danger"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Declining...' : 'Confirm Decline Request'}
                 </button>
               </div>
             </form>

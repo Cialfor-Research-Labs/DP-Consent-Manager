@@ -10,7 +10,7 @@ class DecisionPayload(BaseModel):
     consent_id: Optional[str] = None
 
 class RevokePayload(BaseModel):
-    reason: str
+    reason: Optional[str] = "Consent withdrawn by Data Principal under DPDP Act Sec 6(4)"
     revoked_at: Optional[str] = None
 
 class DSRRequestPayload(BaseModel):
@@ -71,5 +71,34 @@ class NomineePayload(BaseModel):
     idType: str
     idNumber: str
 
+class UserRegisterPayload(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: Optional[str] = "DATA_PRINCIPAL"
+    fiduciary_name: Optional[str] = None
 
+class AdminUserProvisionPayload(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: str = "DATA_FIDUCIARY"
+    fiduciary_name: Optional[str] = "Cialfor Research Labs Private Limited"
 
+class UserLoginPayload(BaseModel):
+    email: str
+    password: str
+
+class UserOut(BaseModel):
+    id: str
+    name: str
+    email: str
+    role: str
+    data_principal_id: Optional[str] = None
+    fiduciary_name: Optional[str] = None
+    created_at: Optional[str] = None
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut

@@ -1,76 +1,132 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useConsent } from '../context/ConsentContext';
-import { ShieldCheck, Mail, CheckCircle2, History, Languages, Sun, Moon } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { 
+  Menu, 
+  PanelLeftClose, 
+  PanelLeft, 
+  Languages, 
+  Sun, 
+  Moon, 
+  LogOut, 
+  User, 
+  LayoutDashboard, 
+  ChevronDown 
+} from 'lucide-react';
 
-export const Header = () => {
+export const Header = ({ sidebarCollapsed, toggleSidebarCollapse, setMobileSidebarOpen }) => {
   const { 
     dataPrincipal, 
     activeTab, 
     setActiveTab, 
-    activeConsents, 
-    language,
-    setLanguage,
-    INDIC_LANGUAGES,
-    t,
-    theme,
-    toggleTheme
+    language, 
+    setLanguage, 
+    INDIC_LANGUAGES, 
+    theme, 
+    toggleTheme 
   } = useConsent();
 
-  const activeCount = activeConsents.filter(c => c.status === 'ACTIVE').length;
+  const { user, isDataPrincipal, isDataFiduciary, logout } = useAuth();
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setProfileDropdownOpen(false);
+      }
+    };
+
+    if (profileDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [profileDropdownOpen]);
+
+  // Derive human-readable page title and breadcrumb
+  const getPageMeta = () => {
+    if (isDataFiduciary) {
+      return {
+        section: 'Enterprise Fiduciary',
+        title: 'Consent Control Console'
+      };
+    }
+    switch (activeTab) {
+      case 'dashboard':
+        return { section: 'Portal', title: 'Data Principal Dashboard' };
+      case 'incoming':
+        return { section: 'Consent Notices', title: 'Pending Consent Requests' };
+      case 'active':
+        return { section: 'Consent Registry', title: 'Active Consents & Permissions' };
+      case 'rights':
+        return { section: 'Statutory Rights', title: 'Data Rights & Grievance Portal' };
+      case 'audit':
+        return { section: 'DPDP Sec 6', title: 'Cryptographic Audit Trail' };
+      case 'profile':
+        return { section: 'Settings', title: 'Account & Identity Profile' };
+      case 'email-sim':
+        return { section: 'Testing Sandbox', title: 'Gmail Notice Simulator' };
+      default:
+        return { section: 'Portal', title: 'Consent Manager' };
+    }
+  };
+
+  const pageMeta = getPageMeta();
+  const displayName = user?.name || dataPrincipal?.name || 'User';
+  const displayEmail = user?.email || dataPrincipal?.email || '';
+  const initial = displayName.charAt(0).toUpperCase();
 
   return (
     <header className="header-nav">
-      <nav className="nav-tabs">
-        <button 
-          className={`nav-tab-btn ${activeTab === 'email-sim' ? 'active' : ''}`}
-          onClick={() => setActiveTab('email-sim')}
+      {/* Left Area: Toggle & Breadcrumb Title */}
+      <div className="header-left-area">
+        {/* Mobile Hamburger Button */}
+        <button
+          type="button"
+          className="header-icon-btn mobile-menu-btn"
+          onClick={() => setMobileSidebarOpen && setMobileSidebarOpen(true)}
+          aria-label="Open Navigation Menu"
+          title="Open Menu"
         >
-          <Mail size={16} />
-          {t('navIncoming')}
+          <Menu size={20} />
         </button>
 
-        <button 
-          className={`nav-tab-btn ${activeTab === 'incoming' ? 'active' : ''}`}
-          onClick={() => setActiveTab('incoming')}
+        {/* Desktop Sidebar Collapse Toggle Button */}
+        <button
+          type="button"
+          className="header-icon-btn desktop-sidebar-toggle-btn"
+          onClick={() => toggleSidebarCollapse && toggleSidebarCollapse()}
+          aria-label={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          title={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
         >
-          <ShieldCheck size={16} />
-          {t('navDecisionHub')}
+          {sidebarCollapsed ? <PanelLeft size={19} /> : <PanelLeftClose size={19} />}
         </button>
 
-        <button 
-          className={`nav-tab-btn ${activeTab === 'active' ? 'active' : ''}`}
-          onClick={() => setActiveTab('active')}
-        >
-          <CheckCircle2 size={16} />
-          {t('navActiveConsents')} ({activeCount})
-        </button>
+        {/* Breadcrumb & Title */}
+        <div className="header-breadcrumb-area">
+          <span className="header-breadcrumb-section">{pageMeta.section}</span>
+          <span className="header-breadcrumb-divider">/</span>
+          <h1 className="header-page-title">{pageMeta.title}</h1>
+        </div>
+      </div>
 
-        <button 
-          className={`nav-tab-btn ${activeTab === 'audit' ? 'active' : ''}`}
-          onClick={() => setActiveTab('audit')}
+      {/* Right Area: Controls & Profile Dropdown */}
+      <div className="header-right-controls">
+        {/* Indic Language Selector - DPDP Sec 5(3) */}
+        <div 
+          className="lang-selector-wrapper" 
+          title="DPDP Act 2023 Sec 5(3) Mandate: Access in all 22 8th Schedule Indic Languages"
         >
-          <History size={16} />
-          {t('navAuditTrail')}
-        </button>
-
-        <button 
-          className={`nav-tab-btn ${activeTab === 'rights' ? 'active' : ''}`}
-          onClick={() => setActiveTab('rights')}
-        >
-          <ShieldCheck size={16} style={{ color: '#34d399' }} />
-          {t('navDataRights')}
-        </button>
-      </nav>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        {/* Indic Language Selector - DPDP Sec 5(3) Mandate */}
-        <div className="lang-selector-wrapper" title="DPDP Act 2023 Sec 5(3) Mandate: Mandatory access in all 22 8th Schedule Indic Languages">
           <div className="lang-selector-btn">
-            <Languages size={16} style={{ color: '#a855f7' }} />
+            <Languages size={15} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
             <select 
               value={language} 
               onChange={(e) => setLanguage(e.target.value)}
               className="lang-select-input"
+              aria-label="Select Indic Language"
             >
               {INDIC_LANGUAGES.map((lang) => (
                 <option key={lang.code} value={lang.code}>
@@ -81,25 +137,123 @@ export const Header = () => {
           </div>
         </div>
 
-        {/* Color Mode / Theme Toggle */}
+        {/* Theme Toggle Button */}
         <button 
+          type="button"
           className="theme-toggle-btn"
           onClick={toggleTheme}
           title={theme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
           aria-label="Toggle Color Theme"
         >
-          {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
         </button>
 
-        <div className="user-profile-badge" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
-          <div className="user-avatar">
-            {dataPrincipal.name ? dataPrincipal.name.charAt(0) : 'P'}
+        {/* Profile Dropdown Container */}
+        {user ? (
+          <div className="profile-dropdown-container" ref={dropdownRef}>
+            <button
+              type="button"
+              className={`profile-pill-btn ${profileDropdownOpen ? 'active' : ''}`}
+              onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+              aria-expanded={profileDropdownOpen}
+              aria-haspopup="true"
+              title="Open Account Menu"
+            >
+              <div className="user-avatar-sm">
+                {initial}
+              </div>
+              <span className="user-pill-name">{displayName.split(' ')[0]}</span>
+              <ChevronDown 
+                size={14} 
+                className={`profile-chevron ${profileDropdownOpen ? 'rotate-180' : ''}`} 
+              />
+            </button>
+
+            {/* Dropdown Menu Card */}
+            {profileDropdownOpen && (
+              <div className="profile-dropdown-card" role="menu">
+                {/* User Summary Header */}
+                <div className="dropdown-user-header">
+                  <div className="dropdown-avatar">
+                    {initial}
+                  </div>
+                  <div className="dropdown-user-details">
+                    <span className="dropdown-name">{displayName}</span>
+                    <span className="dropdown-email" title={displayEmail}>{displayEmail}</span>
+                    <div className="dropdown-badges-row">
+                      <span className={`role-badge ${isDataFiduciary ? 'role-fiduciary' : 'role-principal'}`}>
+                        {isDataFiduciary ? 'DATA FIDUCIARY' : 'DATA PRINCIPAL'}
+                      </span>
+                      {user?.data_principal_id && (
+                        <span className="id-badge">{user.data_principal_id}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="dropdown-divider" />
+
+                {/* Dropdown Navigation Actions */}
+                <div className="dropdown-menu-list">
+                  {isDataPrincipal && (
+                    <>
+                      <button
+                        type="button"
+                        className="dropdown-item"
+                        onClick={() => {
+                          setActiveTab('dashboard');
+                          setProfileDropdownOpen(false);
+                        }}
+                      >
+                        <LayoutDashboard size={15} />
+                        <span>Dashboard</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="dropdown-item"
+                        onClick={() => {
+                          setActiveTab('profile');
+                          setProfileDropdownOpen(false);
+                        }}
+                      >
+                        <User size={15} />
+                        <span>Account Profile & KYC</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <div className="dropdown-divider" />
+
+                {/* Logout Action */}
+                <div className="dropdown-footer">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileDropdownOpen(false);
+                      logout();
+                    }}
+                    className="dropdown-logout-btn"
+                  >
+                    <LogOut size={15} />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2' }}>
-            <span style={{ fontSize: '0.86rem', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{dataPrincipal.name}</span>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{dataPrincipal.email}</span>
-          </div>
-        </div>
+        ) : (
+          <button 
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => {
+              window.location.reload();
+            }}
+          >
+            Sign In
+          </button>
+        )}
       </div>
     </header>
   );

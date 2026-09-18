@@ -5,10 +5,39 @@ import random
 from datetime import datetime, timedelta
 import hashlib
 
-DB_FILE = os.path.join(os.path.dirname(__file__), "consent_manager.db")
+import re
+import email.utils
+
+DEFAULT_DB_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "consent_manager.db"))
+
+def get_db_path() -> str:
+    """
+    Resolves active database path:
+    1. Checks TEST_DATABASE_URL or DATABASE_PATH or TEST_DATABASE_PATH env vars
+    2. Strips 'sqlite:///' or 'sqlite://' prefixes if formatted as URL
+    3. Falls back to DEFAULT_DB_FILE (consent_manager.db)
+    """
+    env_path = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_PATH") or os.getenv("TEST_DATABASE_PATH")
+    if env_path:
+        path_str = str(env_path).strip()
+        if path_str.startswith("sqlite:///"):
+            path_str = path_str[len("sqlite:///"):]
+        elif path_str.startswith("sqlite://"):
+            path_str = path_str[len("sqlite://"):]
+        return os.path.abspath(path_str)
+    return DEFAULT_DB_FILE
+
+# For backward compatibility with modules importing DB_FILE
+DB_FILE = DEFAULT_DB_FILE
 
 def get_db():
-    conn = sqlite3.connect(DB_FILE)
+    active_path = get_db_path()
+    conn = sqlite3.connect(active_path, timeout=30.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -19,11 +48,41 @@ def generate_sha256_signature(data_dict):
 def generate_unpredictable_token():
     return f"tok_{hashlib.sha256(os.urandom(32)).hexdigest()[:16]}"
 
+def normalize_email_address(raw_email: str):
+    """
+    Safely normalizes any email representation (e.g. 'Name <email@example.com>',
+    '\"Name\" <email@example.com>', '<email@example.com>', or raw 'email@example.com')
+    into a clean (display_name, clean_email) tuple with lowercased and stripped email.
+    """
+    if not raw_email:
+        return ("", "")
+    raw_str = str(raw_email).strip()
+    if (raw_str.startswith('"') and raw_str.endswith('"')) or (raw_str.startswith("'") and raw_str.endswith("'")):
+        raw_str = raw_str[1:-1].strip()
+
+    name, addr = email.utils.parseaddr(raw_str)
+    if not addr and "@" in raw_str:
+        angle_match = re.search(r'<([^>]+)>', raw_str)
+        if angle_match:
+            addr = angle_match.group(1).strip()
+        else:
+            addr = raw_str.strip()
+
+    clean_addr = addr.strip().lower()
+    clean_name = name.strip().strip('"\'')
+    if not clean_name and clean_addr and "@" in clean_addr:
+        clean_name = clean_addr.split("@")[0].replace(".", " ").title()
+
+    return clean_name, clean_addr
+
 def generate_data_principal_id(email):
     if not email:
         return 'DP-2026-00000'
+    _, norm_email = normalize_email_address(email)
+    if not norm_email:
+        return 'DP-2026-00000'
     hash_val = 0
-    for char in email:
+    for char in norm_email:
         hash_val = ((hash_val << 5) - hash_val) + ord(char)
         hash_val &= 0xFFFFFFFF
     abs_hash = str(abs(hash_val)).zfill(5)[-5:]
@@ -206,6 +265,21 @@ def init_db():
     );
     """)
 
+    # 10. Users Table for Authentication & Role-Based Access Control (RBAC)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        data_principal_id TEXT,
+        fiduciary_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
     # Auto-add thread_id and message_id columns to existing tables if missing
     for tbl in ["consent_requests", "email_snapshots"]:
         try:
@@ -216,14 +290,194 @@ def init_db():
             cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN message_id TEXT;")
         except Exception:
             pass
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN intent_score INTEGER;")
+        except Exception:
+            pass
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN intent_classification TEXT;")
+        except Exception:
+            pass
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN intent_reasons TEXT;")
+        except Exception:
+            pass
+
+    # High-performance idempotency indexes for Gmail deduplication
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_consent_requests_message_id ON consent_requests(message_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_snapshots_message_id ON email_snapshots(message_id);")
+    except Exception:
+        pass
 
     cursor.execute("SELECT COUNT(*) FROM consent_requests;")
     count = cursor.fetchone()[0]
     if count == 0:
         seed_db(cursor)
 
+    # Seed demo users if users table has no records
+    cursor.execute("SELECT COUNT(*) FROM users;")
+    user_count = cursor.fetchone()[0]
+    if user_count == 0:
+        seed_users(cursor)
+
+    # Normalize existing Data Principal mappings for all requests and users
+    sync_and_normalize_data_principals(cursor)
+
     conn.commit()
     conn.close()
+
+def seed_users(cursor):
+    import bcrypt
+    now_iso = datetime.utcnow().isoformat() + "Z"
+
+    # Pre-hashed passwords for demo users:
+    # "Password@123" for principals, "Admin@123" for admin
+    dp_hash = bcrypt.hashpw(b"Password@123", bcrypt.gensalt()).decode("utf-8")
+    admin_hash = bcrypt.hashpw(b"Admin@123", bcrypt.gensalt()).decode("utf-8")
+
+    dp_rahul_id = generate_data_principal_id("rahul.verma@delhiuniv.ac.in")
+    dp_prerna_id = generate_data_principal_id("pandeyprerna1407@gmail.com")
+
+    # Ensure Prerna Pandey also exists in data_principals table if not already present
+    cursor.execute("SELECT id FROM data_principals WHERE id = ? OR email = ?;", (dp_prerna_id, "pandeyprerna1407@gmail.com"))
+    if not cursor.fetchone():
+        cursor.execute("""
+        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """, (dp_prerna_id, "Prerna Pandey", "pandeyprerna1407@gmail.com", "+91 98765 12345", "CIALFOR-DP-2026", "Cialfor Research Labs", "Verified", "2026-09-01T09:51:21Z"))
+
+    cursor.executemany("""
+    INSERT INTO users (id, email, name, password_hash, role, data_principal_id, fiduciary_name, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """, [
+        ("USR-DEMO-001", "rahul.verma@delhiuniv.ac.in", "Rahul Verma", dp_hash, "DATA_PRINCIPAL", dp_rahul_id, None, now_iso, now_iso),
+        ("USR-DEMO-002", "pandeyprerna1407@gmail.com", "Prerna Pandey", dp_hash, "DATA_PRINCIPAL", dp_prerna_id, None, now_iso, now_iso),
+        ("USR-DEMO-003", "admin@cialfor.com", "Compliance Officer", admin_hash, "DATA_FIDUCIARY", None, "Cialfor Research Labs Private Limited", now_iso, now_iso),
+    ])
+
+def get_user_by_email(email: str):
+    if not email:
+        return None
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE LOWER(email) = LOWER(?);", (email.strip(),))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def get_user_by_id(user_id: str):
+    if not user_id:
+        return None
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = ?;", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def sync_and_normalize_data_principals(cursor):
+    """
+    Safely normalizes and aligns all existing Data Principal records, user accounts,
+    and consent requests to prevent ownership/authorization mismatches.
+    """
+    try:
+        # 1. Update any Data Principals with non-normalized emails
+        cursor.execute("SELECT id, name, email FROM data_principals;")
+        dps = cursor.fetchall()
+        for dp in dps:
+            _, norm_e = normalize_email_address(dp["email"])
+            if norm_e and norm_e != dp["email"]:
+                cursor.execute("UPDATE data_principals SET email = ? WHERE id = ?;", (norm_e, dp["id"]))
+
+        # 2. Update users whose data_principal_id is misaligned with their normalized email
+        cursor.execute("SELECT id, email, name, role, data_principal_id FROM users WHERE role = 'DATA_PRINCIPAL';")
+        users = cursor.fetchall()
+        for u in users:
+            _, norm_email = normalize_email_address(u["email"])
+            if norm_email:
+                expected_dp_id = generate_data_principal_id(norm_email)
+                if u["data_principal_id"] != expected_dp_id:
+                    cursor.execute("SELECT id FROM data_principals WHERE LOWER(email) = ? OR id = ?;", (norm_email, expected_dp_id))
+                    if not cursor.fetchone():
+                        now_str = datetime.utcnow().strftime("%Y-%m-%d")
+                        cursor.execute("""
+                        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                        """, (expected_dp_id, u["name"] or "Data Principal", norm_email, "+91 98765 43210", f"REF-{expected_dp_id}", "DPDP Citizen Register", "Verified", now_str))
+                    cursor.execute("UPDATE users SET data_principal_id = ? WHERE id = ?;", (expected_dp_id, u["id"]))
+
+        # 3. Synchronize consent requests with snapshot to_address
+        cursor.execute("""
+        SELECT cr.id, cr.data_principal_id, es.to_address
+        FROM consent_requests cr
+        LEFT JOIN email_snapshots es ON cr.email_snapshot_id = es.id;
+        """)
+        requests = cursor.fetchall()
+        for req in requests:
+            raw_to = req["to_address"] or ""
+            parsed_name, norm_email = normalize_email_address(raw_to)
+            if norm_email:
+                expected_dp_id = generate_data_principal_id(norm_email)
+                cursor.execute("SELECT id FROM data_principals WHERE LOWER(email) = ? OR id = ?;", (norm_email, expected_dp_id))
+                if not cursor.fetchone():
+                    now_str = datetime.utcnow().strftime("%Y-%m-%d")
+                    cursor.execute("""
+                    INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """, (expected_dp_id, parsed_name or "Data Principal", norm_email, "+91 98765 43210", f"REF-{expected_dp_id}", "DPDP Citizen Register", "Verified", now_str))
+                
+                if req["data_principal_id"] != expected_dp_id:
+                    cursor.execute("UPDATE consent_requests SET data_principal_id = ? WHERE id = ?;", (expected_dp_id, req["id"]))
+    except Exception:
+        pass
+
+def link_or_create_data_principal(email: str, name: str = None) -> str:
+    conn = get_db()
+    cursor = conn.cursor()
+    parsed_name, norm_email = normalize_email_address(email)
+    if not norm_email:
+        conn.close()
+        return 'DP-2026-00000'
+
+    final_name = name.strip() if (name and name.strip()) else (parsed_name or "Data Principal")
+    dp_id = generate_data_principal_id(norm_email)
+
+    cursor.execute("SELECT id FROM data_principals WHERE LOWER(email) = ? OR id = ?;", (norm_email, dp_id))
+    row = cursor.fetchone()
+    if row:
+        dp_id = row["id"]
+        cursor.execute("UPDATE data_principals SET email = ? WHERE id = ?;", (norm_email, dp_id))
+        conn.commit()
+    else:
+        now_str = datetime.utcnow().strftime("%Y-%m-%d")
+        cursor.execute("""
+        INSERT INTO data_principals (id, name, email, phone, roll_no, institution, kyc_status, registered_on)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """, (dp_id, final_name, norm_email, "+91 98765 43210", f"REF-{dp_id}", "DPDP Citizen Register", "Verified", now_str))
+        conn.commit()
+    conn.close()
+    return dp_id
+
+def create_user_account(name: str, email: str, password_hash: str, role: str, data_principal_id: str = None, fiduciary_name: str = None) -> dict:
+    import uuid
+    conn = get_db()
+    cursor = conn.cursor()
+    user_id = f"USR-{uuid.uuid4().hex[:12].upper()}"
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    norm_email = email.strip().lower()
+    norm_role = role.strip().upper()
+
+    cursor.execute("""
+    INSERT INTO users (id, email, name, password_hash, role, data_principal_id, fiduciary_name, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """, (user_id, norm_email, name.strip(), password_hash, norm_role, data_principal_id, fiduciary_name, now_iso, now_iso))
+    conn.commit()
+
+    cursor.execute("SELECT id, email, name, role, data_principal_id, fiduciary_name, created_at FROM users WHERE id = ?;", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row)
 
 def seed_db(cursor):
     dp_rahul_id = generate_data_principal_id("rahul.verma@delhiuniv.ac.in")

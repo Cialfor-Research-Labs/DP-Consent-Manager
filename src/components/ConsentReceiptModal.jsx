@@ -21,14 +21,14 @@ export const ConsentReceiptModal = () => {
     <div className="modal-overlay">
       <div className="modal-card" style={{ maxWidth: '640px' }}>
         <div className="modal-header">
-          <div className="modal-title" style={{ color: '#34d399' }}>
-            <ShieldCheck size={26} /> {t('receiptModalTitle')}
+          <div className="modal-title" style={{ color: 'var(--success)' }}>
+            <ShieldCheck size={24} /> {t('receiptModalTitle')}
           </div>
           <button className="close-btn" onClick={() => setLatestReceipt(null)}>✕</button>
         </div>
 
-        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-          <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+        <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+          <div style={{ fontSize: '0.86rem', color: 'var(--text-secondary)' }}>
             {t('receiptModalSub')}
           </div>
         </div>
@@ -38,7 +38,7 @@ export const ConsentReceiptModal = () => {
           
           <div className="receipt-row">
             <span className="receipt-key">Consent Artifact ID:</span>
-            <span className="receipt-val" style={{ color: '#60a5fa' }}>{latestReceipt.consentId}</span>
+            <span className="receipt-val font-mono" style={{ color: 'var(--accent-primary)' }}>{latestReceipt.consentId}</span>
           </div>
 
           <div className="receipt-row">
@@ -58,7 +58,7 @@ export const ConsentReceiptModal = () => {
 
           <div className="receipt-row">
             <span className="receipt-key">{t('grantedAttrs')} ({latestReceipt.grantedAttributes.length}):</span>
-            <span className="receipt-val" style={{ color: '#34d399' }}>
+            <span className="receipt-val" style={{ color: 'var(--success)' }}>
               {latestReceipt.grantedAttributes.join(', ')}
             </span>
           </div>
@@ -66,7 +66,7 @@ export const ConsentReceiptModal = () => {
           {latestReceipt.deniedAttributes.length > 0 && (
             <div className="receipt-row">
               <span className="receipt-key">{t('deniedAttrs')}:</span>
-              <span className="receipt-val" style={{ color: '#f87171' }}>
+              <span className="receipt-val" style={{ color: 'var(--danger)' }}>
                 {latestReceipt.deniedAttributes.join(', ')}
               </span>
             </div>
@@ -84,9 +84,9 @@ export const ConsentReceiptModal = () => {
 
           <div className="receipt-hash-box">
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
-              CRYPTOGRAPHIC DIGITAL SIGNATURE HASH (SHA-256):
+              SHA-256 INTEGRITY HASH:
             </div>
-            {latestReceipt.receiptHash}
+            {latestReceipt.receiptHash || latestReceipt.sha256IntegrityHash}
           </div>
         </div>
 

@@ -249,3 +249,9 @@ __marimo__/
 *.db.bak_*
 backend/*.bak
 backend/*.bak_*
+
+
+
+scratch/*.db
+scratch/*.db-shm
+scratch/*.db-wal

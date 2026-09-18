@@ -4,7 +4,11 @@ import sys
 import json
 import sqlite3
 
-BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Ensure backend and tests directory are in python search path
+TESTS_DIR = os.path.abspath(os.path.dirname(__file__))
+BACKEND_DIR = os.path.abspath(os.path.join(TESTS_DIR, ".."))
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 

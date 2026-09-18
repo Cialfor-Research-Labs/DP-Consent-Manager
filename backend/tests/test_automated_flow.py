@@ -4,8 +4,11 @@ import unittest
 import uuid
 import json
 
-# Ensure backend directory is in python search path
-BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Ensure backend and tests directory are in python search path
+TESTS_DIR = os.path.abspath(os.path.dirname(__file__))
+BACKEND_DIR = os.path.abspath(os.path.join(TESTS_DIR, ".."))
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
@@ -240,8 +243,8 @@ class TestAutomatedWorkflow(unittest.TestCase):
         payload = {
             "from_address": "Marketing Partners <ads@partners.com>",
             "to_address": self.email_a,
-            "subject": "Consent for Promotional Communications",
-            "body_text": "Consent request for promotional offers.",
+            "subject": "Action Required: Consent for Promotional Communications",
+            "body_text": "Marketing Partners requests your consent to process email address and contact details for promotional communications.",
             "message_id": msg_id,
             "thread_id": thd_id
         }
@@ -267,8 +270,8 @@ class TestAutomatedWorkflow(unittest.TestCase):
         payload = {
             "from_address": "University <records@uni.edu>",
             "to_address": self.email_a,
-            "subject": "Idempotency Test Notice",
-            "body_text": "Testing idempotency.",
+            "subject": "Action Required: University Academic Records Consent Verification",
+            "body_text": "University requests your explicit consent to process academic records for student verification.",
             "message_id": unique_msg,
             "thread_id": "thd_idem_1"
         }

@@ -1,0 +1,89 @@
+{
+  "current_suite_request_matches": [],
+  "historical_test_token_matches": [
+    {
+      "id": "REQ-2026-CIALFOR-494",
+      "token": "tok_test_loan_123",
+      "message_id": null,
+      "email_snapshot_id": "ES-2026-CIALFOR-4762",
+      "data_principal_id": "DP-2026-59128"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-227",
+      "token": "tok_test_bank_thread",
+      "message_id": "msg_bank_67890",
+      "email_snapshot_id": "ES-2026-CIALFOR-5392",
+      "data_principal_id": "DP-2026-99183"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-479",
+      "token": "tok_test_preserved",
+      "message_id": null,
+      "email_snapshot_id": "ES-2026-CIALFOR-7482",
+      "data_principal_id": "DP-2026-80878"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-999",
+      "token": "tok_sec_rev_1",
+      "message_id": null,
+      "email_snapshot_id": "ES-2026-CIALFOR-5068",
+      "data_principal_id": "DP-2026-80878"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-224",
+      "token": "tok_test_e2e_1789470794",
+      "message_id": "msg_1789470794",
+      "email_snapshot_id": "ES-2026-CIALFOR-2911",
+      "data_principal_id": "DP-2026-97620"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-354",
+      "token": "tok_test_e2e_1789470841",
+      "message_id": "msg_1789470841",
+      "email_snapshot_id": "ES-2026-CIALFOR-2812",
+      "data_principal_id": "DP-2026-97620"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-670",
+      "token": "tok_test_e2e_1789470961",
+      "message_id": "msg_1789470961",
+      "email_snapshot_id": "ES-2026-CIALFOR-5432",
+      "data_principal_id": "DP-2026-97620"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-272",
+      "token": "tok_test_e2e_1789471003",
+      "message_id": "msg_1789471003",
+      "email_snapshot_id": "ES-2026-CIALFOR-8173",
+      "data_principal_id": "DP-2026-97620"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-805",
+      "token": "tok_test_e2e_1789471205",
+      "message_id": "msg_1789471205",
+      "email_snapshot_id": "ES-2026-CIALFOR-4876",
+      "data_principal_id": "DP-2026-97620"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-264",
+      "token": "tok_e2e_prerna_gmail_test_001",
+      "message_id": null,
+      "email_snapshot_id": "ES-2026-CIALFOR-1886",
+      "data_principal_id": "DP-2026-59128"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-444",
+      "token": "tok_e2e_prerna_deny_test_001",
+      "message_id": null,
+      "email_snapshot_id": "ES-2026-CIALFOR-6200",
+      "data_principal_id": "DP-2026-59128"
+    },
+    {
+      "id": "REQ-2026-CIALFOR-225",
+      "token": "tok_e2e_cross_user_security_test",
+      "message_id": null,
+      "email_snapshot_id": "ES-2026-CIALFOR-1678",
+      "data_principal_id": "DP-2026-59128"
+    }
+  ]
+}

@@ -3,6 +3,10 @@ import re
 import json
 import hmac
 import random
+import logging
+import mimetypes
+import threading
+import urllib.request
 import uvicorn
 from typing import Optional
 from datetime import datetime, timedelta
@@ -10,6 +14,17 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, HTTPException, Query, Path, Depends, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
+
+logger = logging.getLogger(__name__)
+
+from consent_intent_detector import (
+    detect_consent_intent,
+    CONSENT_REQUEST,
+    NOT_CONSENT,
+    AMBIGUOUS
+)
 from database import (
     get_db, 
     init_db, 
@@ -79,6 +94,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── SINGLE-PORT ASSETS CONFIGURATION ─────────────────────────────────────────
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+
+DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dist"))
+ASSETS_DIR = os.path.join(DIST_DIR, "assets")
+
+if os.path.isdir(ASSETS_DIR):
+    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+# ── ADMIN / DEBUG FIELD GUARD ─────────────────────────────────────────────────
+# Fields that are backend/admin-debug only and must NEVER be returned to
+# Data Principal or Data Fiduciary-facing API responses.
+_ADMIN_ONLY_FIELDS = frozenset({
+    "intent_score", "intentScore",
+    "intent_classification", "intentClassification",
+    "intent_reasons", "intentReasons",
+})
+
+
+def strip_admin_fields(response):
+    """Remove internal intent metadata, including nested snapshots and attributes."""
+    if isinstance(response, dict):
+        for field in _ADMIN_ONLY_FIELDS:
+            response.pop(field, None)
+        for value in response.values():
+            strip_admin_fields(value)
+    elif isinstance(response, list):
+        for value in response:
+            strip_admin_fields(value)
+    return response
+
+
 def hydrate_request(req_row, conn):
     req = dict(req_row)
     req["requestedAttributes"] = json.loads(req["requested_attributes"])
@@ -136,7 +184,9 @@ def hydrate_request(req_row, conn):
     req["threadId"] = req.get("thread_id") or req["emailSnapshot"].get("threadId", "")
     req["messageId"] = req.get("message_id") or req["emailSnapshot"].get("messageId", "")
 
-    return req
+    # Keep database metadata internal by default. Only the protected Gmail
+    # webhook explicitly adds intent debugging metadata to its response.
+    return strip_admin_fields(req)
 
 def check_request_expiry(req, conn):
     if not req.get("expires_at"):
@@ -573,7 +623,10 @@ def dynamic_create_request_for_token(
     purpose: str = None,
     fiduciary: str = None,
     thread_id: str = None,
-    message_id: str = None
+    message_id: str = None,
+    intent_score: int = None,
+    intent_classification: str = None,
+    intent_reasons: str = None
 ):
     cursor = conn.cursor()
     clean_msg_id = (message_id or "").strip()
@@ -598,6 +651,13 @@ def dynamic_create_request_for_token(
     final_fiduciary = resolve_fiduciary_name(token, final_domain, subject or "", body or "", fiduciary or "")
     final_category, final_logo = get_fiduciary_metadata(final_fiduciary, final_domain)
 
+    # Intent detection metadata default if not explicitly provided
+    if intent_score is None:
+        det = detect_consent_intent(final_subject, body or "", final_fiduciary)
+        intent_score = det["score"]
+        intent_classification = det["classification"]
+        intent_reasons = json.dumps(det["reasons"])
+
     # CRITICAL: Always use the real email body as-is.
     # Only fall back to a generic template if no body was provided at all.
     final_body = body or (
@@ -616,8 +676,8 @@ def dynamic_create_request_for_token(
     # 2. Create EmailSnapshot
     snapshot_id = f"ES-2026-CIALFOR-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}"
     cursor.execute("""
-    INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size, dkim_status, spf_status, thread_id, message_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size, dkim_status, spf_status, thread_id, message_id, intent_score, intent_classification, intent_reasons)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         snapshot_id,
         f"{final_fiduciary} <compliance@{final_domain.lower().replace(' ', '').replace('/', '')}.com>",
@@ -630,7 +690,10 @@ def dynamic_create_request_for_token(
         "DKIM Signed",
         "SPF Pass",
         thread_id,
-        message_id
+        message_id,
+        intent_score,
+        intent_classification,
+        intent_reasons
     ))
 
     # 3. Create ConsentRequest
@@ -640,8 +703,8 @@ def dynamic_create_request_for_token(
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
 
     cursor.execute("""
-    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, domain, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at, thread_id, message_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO consent_requests (id, token, notice_id, data_principal_id, email_snapshot_id, fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email, dpo_name, dpo_email, purpose, domain, legal_basis, validity_period, data_region, requested_attributes, status, created_at, expires_at, thread_id, message_id, intent_score, intent_classification, intent_reasons)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         req_id,
         token,
@@ -664,7 +727,10 @@ def dynamic_create_request_for_token(
         now,
         expires,
         thread_id,
-        message_id
+        message_id,
+        intent_score,
+        intent_classification,
+        intent_reasons
     ))
 
     conn.commit()
@@ -960,13 +1026,11 @@ def is_system_generated_email(
 
 
 @app.post("/api/gmail-webhook")
-@app.post("/api/sync-gmail")
-@app.post("/api/ingest-email")
 def sync_gmail_webhook(
     payload: EmailIngestPayload,
     _authorized: bool = Depends(verify_webhook_secret)
 ):
-    # Defense-in-depth guard: Ignore system-generated receipts/replies/notifications
+    # 1. Defense-in-depth guard: Ignore system-generated receipts/replies/notifications
     is_sys, sys_reason = is_system_generated_email(
         from_address=payload.from_address,
         subject=payload.subject,
@@ -978,6 +1042,34 @@ def sync_gmail_webhook(
             "ignored": True,
             "reason": "system_generated_message",
             "detail": sys_reason
+        }
+
+    # 2. Consent Intent Detector:
+    # Requires contextual evidence; keyword matches alone must not create requests.
+    intent_result = detect_consent_intent(
+        subject=payload.subject or "",
+        body=payload.body_text or "",
+        sender=payload.from_address or "",
+        fiduciary_name=payload.fiduciary_name or ""
+    )
+
+    logger.info(
+        f"[INTENT-DETECTOR] Subject: '{payload.subject}' -> "
+        f"Classification: {intent_result['classification']}, "
+        f"Score: {intent_result['score']}, Confidence: {intent_result['confidence']}, "
+        f"Reasons: {intent_result['reasons']}"
+    )
+
+    if not intent_result["is_consent_request"]:
+        return {
+            "ignored": True,
+            "reason": f"intent_{intent_result['classification'].lower()}",
+            "detail": intent_result["reasons"],
+            "classification": intent_result["classification"],
+            "intent_score": intent_result["score"],
+            "intent_classification": intent_result["classification"],
+            "intent_reasons": intent_result["reasons"],
+            "confidence": intent_result["confidence"]
         }
 
     conn = get_db()
@@ -1041,21 +1133,21 @@ def sync_gmail_webhook(
         if req.get("status") == "PENDING":
             cursor.execute("""
                 UPDATE consent_requests 
-                SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
+                SET data_principal_id = ?, fiduciary_name = ?, fiduciary_category = ?, fiduciary_logo = ?, domain = ?, purpose = ?, requested_attributes = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id), intent_score = ?, intent_classification = ?, intent_reasons = ?
                 WHERE id = ?;
-            """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), effective_thread_id, effective_message_id, req["id"]))
+            """, (dp_id, fiduciary_name, fiduciary_category, fiduciary_logo, new_domain, new_purpose, json.dumps(new_attrs), effective_thread_id, effective_message_id, intent_result["score"], intent_result["classification"], json.dumps(intent_result["reasons"]), req["id"]))
         else:
             cursor.execute("""
                 UPDATE consent_requests 
-                SET thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id) 
+                SET thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id), intent_score = ?, intent_classification = ?, intent_reasons = ?
                 WHERE id = ?;
-            """, (effective_thread_id, effective_message_id, req["id"]))
+            """, (effective_thread_id, effective_message_id, intent_result["score"], intent_result["classification"], json.dumps(intent_result["reasons"]), req["id"]))
         
         cursor.execute("""
             UPDATE email_snapshots 
-            SET subject = ?, body_text = ?, from_address = ?, to_address = ?, sent_date = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id)
+            SET subject = ?, body_text = ?, from_address = ?, to_address = ?, sent_date = ?, thread_id = COALESCE(?, thread_id), message_id = COALESCE(?, message_id), intent_score = ?, intent_classification = ?, intent_reasons = ?
             WHERE id = ?;
-        """, (payload.subject, payload.body_text, payload.from_address, payload.to_address, sent_date_str, effective_thread_id, effective_message_id, req["email_snapshot_id"]))
+        """, (payload.subject, payload.body_text, payload.from_address, payload.to_address, sent_date_str, effective_thread_id, effective_message_id, intent_result["score"], intent_result["classification"], json.dumps(intent_result["reasons"]), req["email_snapshot_id"]))
         conn.commit()
         cursor.execute("SELECT * FROM consent_requests WHERE id = ?;", (req["id"],))
         row = cursor.fetchone()
@@ -1072,7 +1164,10 @@ def sync_gmail_webhook(
             purpose=new_purpose,
             fiduciary=fiduciary_name,
             thread_id=clean_thread_id or payload.thread_id,
-            message_id=clean_message_id or payload.message_id
+            message_id=clean_message_id or payload.message_id,
+            intent_score=intent_result["score"],
+            intent_classification=intent_result["classification"],
+            intent_reasons=json.dumps(intent_result["reasons"])
         )
 
     req = dict(row)
@@ -1081,7 +1176,26 @@ def sync_gmail_webhook(
 
     result["is_new"] = is_new
     result["token"] = req["token"]
-    result["link"] = f"http://localhost:5173/request/{req['token']}"
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:8000").rstrip("/")
+    result["link"] = f"{frontend_base}/request/{req['token']}"
+    result["intent_score"] = intent_result["score"]
+    result["intent_classification"] = intent_result["classification"]
+    result["intent_reasons"] = intent_result["reasons"]
+    result["intentScore"] = intent_result["score"]
+    result["intentClassification"] = intent_result["classification"]
+    result["intentReasons"] = intent_result["reasons"]
+    return result
+
+
+@app.post("/api/sync-gmail")
+@app.post("/api/ingest-email")
+def ingest_email_without_debug_metadata(
+    payload: EmailIngestPayload,
+    _authorized: bool = Depends(verify_webhook_secret)
+):
+    result = strip_admin_fields(sync_gmail_webhook(payload, _authorized))
+    if result.get("ignored") and result.get("reason", "").startswith("intent_"):
+        return {"ignored": True, "reason": "not_a_consent_request"}
     return result
 
 
@@ -1145,7 +1259,7 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
 
     cursor.execute("SELECT * FROM consent_requests WHERE id = ?;", (req_id,))
     row = cursor.fetchone()
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
@@ -1239,7 +1353,7 @@ def resolve_consent_request(
         conn.close()
         raise HTTPException(status_code=410, detail="Consent request link has expired.")
 
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
@@ -1259,7 +1373,7 @@ def get_consent_request_by_notice(notice_id: str = Path(...)):
         conn.close()
         raise HTTPException(status_code=410, detail="Consent request link has expired.")
 
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
@@ -1296,7 +1410,7 @@ def list_my_consent_requests(
             (dp_id,)
         )
     rows = cursor.fetchall()
-    results = [hydrate_request(r, conn) for r in rows]
+    results = [strip_admin_fields(hydrate_request(r, conn)) for r in rows]
     conn.close()
     return results
 
@@ -1340,7 +1454,7 @@ def list_consent_requests(
             else:
                 cursor.execute("SELECT * FROM consent_requests ORDER BY created_at DESC;")
     rows = cursor.fetchall()
-    results = [hydrate_request(r, conn) for r in rows]
+    results = [strip_admin_fields(hydrate_request(r, conn)) for r in rows]
     conn.close()
     return results
 
@@ -1458,7 +1572,7 @@ def get_consent_request_by_token_path(
         conn.close()
         raise HTTPException(status_code=410, detail="Consent request link has expired.")
 
-    result = hydrate_request(row, conn)
+    result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
     return result
 
@@ -1797,11 +1911,57 @@ def record_consent_decision(
     conn.commit()
     conn.close()
 
+    # ── EVENT-DRIVEN IMMEDIATE DISPATCH ─────────────────────────────
+    # Trigger near-immediate receipt dispatch via Apps Script Web App
+    request_immediate_dispatch(notification_id=notif_id)
+
     return {
         "success": True,
         "message": f"Consent decision {payload.decision} recorded successfully.",
         "consent": consent_record
     }
+
+
+def request_immediate_dispatch(notification_id: Optional[str] = None):
+    """
+    Event-driven immediate receipt dispatch:
+    Triggers Google Apps Script via its deployed Web App webhook URL (APPS_SCRIPT_WEBAPP_URL)
+    to deliver pending receipts to the original Gmail thread near-immediately (< 2s)
+    rather than waiting up to 60s for the next scheduled trigger execution.
+
+    Runs in a non-blocking background daemon thread so the client HTTP response is instantaneous.
+    If APPS_SCRIPT_WEBAPP_URL is not configured or times out, the notification remains 'PENDING'
+    and will be automatically delivered by the 1-minute time-driven trigger as a zero-risk fallback.
+    """
+    dispatch_url = os.getenv("APPS_SCRIPT_WEBAPP_URL") or os.getenv("GMAIL_DISPATCH_WEBHOOK_URL")
+    if not dispatch_url:
+        return
+
+    secret = os.getenv("GMAIL_WEBHOOK_SECRET")
+
+    def _trigger():
+        try:
+            payload_data = {
+                "secret": secret,
+                "notification_id": notification_id,
+                "action": "DISPATCH_PENDING"
+            }
+            req_data = json.dumps(payload_data).encode("utf-8")
+            req = urllib.request.Request(
+                dispatch_url,
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Webhook-Secret": secret or ""
+                }
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                print(f"[DISPATCH] Immediate dispatch triggered: HTTP {resp.status}")
+        except Exception as ex:
+            print(f"[DISPATCH-WARN] Immediate dispatch trigger encountered error: {ex}. 1-min scheduled trigger will deliver as fallback.")
+
+    threading.Thread(target=_trigger, daemon=True).start()
+
 
 @app.get("/api/notifications/pending")
 def list_pending_notifications(_authorized: bool = Depends(verify_webhook_secret)):
@@ -1833,6 +1993,23 @@ def acknowledge_notification(
     conn.commit()
     conn.close()
     return {"success": True, "id": notification_id, "status": "SENT", "sent_at": now}
+
+
+@app.post("/api/notifications/dispatch-immediate")
+def trigger_dispatch_immediate(
+    _authorized: bool = Depends(verify_webhook_secret)
+):
+    """
+    Triggers immediate event-driven dispatch of all pending notifications.
+    Can be called directly by administrators, tests, or external webhooks.
+    """
+    dispatch_url = os.getenv("APPS_SCRIPT_WEBAPP_URL") or os.getenv("GMAIL_DISPATCH_WEBHOOK_URL")
+    request_immediate_dispatch()
+    return {
+        "success": True,
+        "message": "Immediate dispatch requested.",
+        "dispatch_url_configured": bool(dispatch_url)
+    }
 
 
 @app.get("/api/consents")
@@ -2246,6 +2423,9 @@ def submit_grievance(
     conn.commit()
     conn.close()
 
+    # ── EVENT-DRIVEN IMMEDIATE DISPATCH ─────────────────────────────
+    request_immediate_dispatch(notification_id=notif_id)
+
     return {
         "success": True,
         "message": f"Statutory grievance {ticket_id} filed successfully under DPDP Act Section 13.",
@@ -2436,9 +2616,56 @@ def remove_nominee(current_user: dict = Depends(require_role(["DATA_PRINCIPAL"])
     conn.close()
     return {"success": True, "message": "Statutory nominee designation revoked."}
 
+
+# ── SINGLE-PORT SPA & STATIC ASSET SERVING ──────────────────────────────────
+
+@app.get("/")
+async def serve_root():
+    """Serves the compiled React application entry point (index.html)."""
+    index_file = os.path.join(DIST_DIR, "index.html")
+    if os.path.isfile(index_file):
+        return FileResponse(index_file, media_type="text/html")
+    return HTMLResponse(
+        "<html><body><h1>DP Consent Manager</h1><p>Frontend dist/ not built yet. Run <code>npm run build</code>.</p></body></html>",
+        status_code=200
+    )
+
+
+@app.get("/{full_path:path}")
+async def serve_spa_fallback(full_path: str):
+    """
+    SPA Fallback Route:
+    - Never intercepts /api/* routes (returns 404 JSON for unknown API endpoints).
+    - Serves static assets directly if the file exists in dist/.
+    - Serves index.html for all client-side routes (/dashboard, /request/<token>, etc.) on browser refresh.
+    """
+    # 1. Strict guard: Never intercept unmatched /api/* routes with HTML fallback
+    if full_path.startswith("api/") or full_path == "api":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"API endpoint '/{full_path}' not found."
+        )
+
+    # 2. Check if the requested path corresponds to an existing static file in DIST_DIR
+    requested_file = os.path.join(DIST_DIR, full_path)
+    if os.path.isfile(requested_file):
+        guessed_type, _ = mimetypes.guess_type(requested_file)
+        return FileResponse(requested_file, media_type=guessed_type)
+
+    # 3. SPA Fallback: Serve index.html for all frontend routes
+    index_file = os.path.join(DIST_DIR, "index.html")
+    if os.path.isfile(index_file):
+        return FileResponse(index_file, media_type="text/html")
+
+    return HTMLResponse(
+        "<html><body><h1>DP Consent Manager</h1><p>Frontend dist/ not built yet. Run <code>npm run build</code>.</p></body></html>",
+        status_code=200
+    )
+
+
 if __name__ == "__main__":
     print("====================================================")
-    print("DP Consent Manager Python FastAPI Real Email Backend")
-    print("REST Base URL: http://localhost:8000/api")
+    print("DP Consent Manager Single-Port React + FastAPI Server")
+    print("Serving UI & REST API Base: http://localhost:8000")
     print("====================================================")
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -290,6 +290,18 @@ def init_db():
             cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN message_id TEXT;")
         except Exception:
             pass
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN intent_score INTEGER;")
+        except Exception:
+            pass
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN intent_classification TEXT;")
+        except Exception:
+            pass
+        try:
+            cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN intent_reasons TEXT;")
+        except Exception:
+            pass
 
     # High-performance idempotency indexes for Gmail deduplication
     try:

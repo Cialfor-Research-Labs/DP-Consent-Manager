@@ -3,8 +3,11 @@ import sys
 import unittest
 import json
 
-# Ensure backend directory is in python search path
-BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Ensure backend and tests directory are in python search path
+TESTS_DIR = os.path.abspath(os.path.dirname(__file__))
+BACKEND_DIR = os.path.abspath(os.path.join(TESTS_DIR, ".."))
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
@@ -214,12 +217,15 @@ class TestClassification(unittest.TestCase):
         self.assertIn("Placement Profile Details", attr_names)
 
     def test_webhook_e2e_unknown_ingestion(self):
-        """Test POST /api/gmail-webhook for an unknown mail falls back to General, not FinTech."""
+        """Test POST /api/gmail-webhook for a general corporate consent mail falls back to General, not FinTech."""
         payload = {
             "from_address": "Operations <ops@genericcorp.com>",
             "to_address": "Manu Sharma <manusharma.cs78@gmail.com>",
-            "subject": "System Maintenance Advisory Notice",
-            "body_text": "Scheduled server maintenance this weekend. No financial or health action needed.",
+            "subject": "Action Required: Consent for Corporate Facility Access Card & Badge Issuance",
+            "body_text": (
+                "Generic Corp requests your explicit consent to collect and process your employee badge ID, "
+                "facility access records, and visitor log details for office building security."
+            ),
             "extracted_token": "tok_unknown_webhook_test_002"
         }
         headers = {"X-Webhook-Secret": self.webhook_secret}

@@ -328,7 +328,7 @@ export const ConsentProvider = ({ children }) => {
       }).catch(() => {
         // Silent catch for background poll to avoid intrusive error banners
       });
-    }, 15000);
+    }, 5000);
 
     return () => clearInterval(pollInterval);
   }, [authUserId]);

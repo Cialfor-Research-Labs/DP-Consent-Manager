@@ -1,0 +1,53 @@
+{
+  "backup": "D:\\DP-Consent-Manager\\scratch\\intent-cleanup-backup.db",
+  "removed": {
+    "fiduciary_notifications": [
+      "NOTIF-2026-2328",
+      "NOTIF-2026-8595"
+    ],
+    "audit_events": [
+      "AUD-1789451406184-7810",
+      "AUD-456",
+      "AUD-602",
+      "AUD-946",
+      "AUD-947"
+    ],
+    "consent_decisions": [
+      "DEC-1789443450788",
+      "DEC-1789451406182"
+    ],
+    "consents": [
+      "CNST-2026-1986",
+      "CNST-2026-4425"
+    ],
+    "consent_requests": [
+      "REQ-2026-CIALFOR-224",
+      "REQ-2026-CIALFOR-272",
+      "REQ-2026-CIALFOR-354",
+      "REQ-2026-CIALFOR-670",
+      "REQ-2026-CIALFOR-805",
+      "REQ-2026-CIALFOR-932",
+      "REQ-2026-CIALFOR-999"
+    ],
+    "email_snapshots": [
+      "ES-2026-CIALFOR-2812",
+      "ES-2026-CIALFOR-2911",
+      "ES-2026-CIALFOR-4876",
+      "ES-2026-CIALFOR-5068",
+      "ES-2026-CIALFOR-5432",
+      "ES-2026-CIALFOR-8173",
+      "ES-2026-CIALFOR-8743"
+    ]
+  },
+  "counts": {
+    "fiduciary_notifications": 2,
+    "audit_events": 5,
+    "consent_decisions": 2,
+    "consents": 2,
+    "consent_requests": 7,
+    "email_snapshots": 7
+  },
+  "preserved": "All other rows, including all users and data principals, verified byte-for-byte",
+  "integrity": "ok",
+  "new_foreign_key_violations": 0
+}

@@ -41,10 +41,8 @@ var DEFAULT_BACKEND_BASE_URL =
   "https://doug-promoted-stockholm-kernel.trycloudflare.com";
 
 
-// Initial history only. Subsequent runs start at the last successful sync.
+// Number of days of Gmail history to inspect.
 var LOOKBACK_DAYS = 7;
-var SYNC_OVERLAP_SECONDS = 120;
-var SYNC_PAGE_SIZE = 50;
 
 
 // ─────────────────────────────────────────────────────────────
@@ -256,21 +254,6 @@ var GMAIL_SEARCH_QUERY = [
 
 function syncConsentEmails() {
 
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(1000)) {
-    Logger.log('[SKIPPED] Another email sync is already running.');
-    return;
-  }
-  try {
-    syncConsentEmailsLocked();
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-
-function syncConsentEmailsLocked() {
-
   var props =
     PropertiesService.getScriptProperties();
 
@@ -326,15 +309,20 @@ function syncConsentEmailsLocked() {
 
   // ── BUILD DATE FILTER ─────────────────────────────────────
 
-  // Freeze the upper bound before searching so arrivals during this run are
-  // left for the next trigger. Epoch seconds avoid date-only rounding.
-  // https://developers.google.com/workspace/gmail/api/guides/filtering
-  var syncStartedAt = Math.floor(Date.now() / 1000);
-  var lastSuccessfulSync = Number(props.getProperty('LAST_SUCCESSFUL_SYNC_TIME'));
-  var cutoffSeconds = lastSuccessfulSync > 0 && lastSuccessfulSync <= syncStartedAt
-    ? Math.max(0, lastSuccessfulSync - SYNC_OVERLAP_SECONDS)
-    : syncStartedAt - LOOKBACK_DAYS * 24 * 60 * 60;
-  var dateFilter = ' after:' + cutoffSeconds + ' before:' + syncStartedAt;
+  var cutoff = new Date();
+
+  cutoff.setDate(
+    cutoff.getDate() - LOOKBACK_DAYS
+  );
+
+
+  var dateFilter =
+    ' after:' +
+    Utilities.formatDate(
+      cutoff,
+      'UTC',
+      'yyyy/MM/dd'
+    );
 
 
   // Search consent related inbox threads.
@@ -359,9 +347,6 @@ function syncConsentEmailsLocked() {
     function(query) {
 
       var threads = [];
-      var start = 0;
-
-      do {
 
 
       try {
@@ -369,13 +354,11 @@ function syncConsentEmailsLocked() {
         threads =
           GmailApp.search(
             query,
-            start,
-            SYNC_PAGE_SIZE
+            0,
+            50
           );
 
       } catch (e) {
-
-        errorCount++;
 
         Logger.log(
           '[ERROR] Gmail search failed: ' +
@@ -389,7 +372,6 @@ function syncConsentEmailsLocked() {
 
       // ── PROCESS THREADS ───────────────────────────────────
 
-      try {
       threads.forEach(
         function(thread) {
 
@@ -420,15 +402,6 @@ function syncConsentEmailsLocked() {
 
                 // ── EXTRACT MESSAGE FIELDS ─────────────────
 
-                // Search returns whole threads; skip historical members before
-                // fetching their bodies. Keep message_id deduplication above.
-                var date = msg.getDate();
-                var messageSeconds = date.getTime() / 1000;
-                if (messageSeconds < cutoffSeconds || messageSeconds >= syncStartedAt) {
-                  skippedCount++;
-                  return;
-                }
-
                 var fromRaw =
                   msg.getFrom() || '';
 
@@ -443,6 +416,10 @@ function syncConsentEmailsLocked() {
 
                 var bodyText =
                   msg.getPlainBody() || '';
+
+                var date =
+                  msg.getDate();
+
 
                 // Ignore completely empty emails.
                 if (
@@ -826,25 +803,9 @@ function syncConsentEmailsLocked() {
 
         }
       );
-      } catch (messageError) {
-        errorCount++;
-        Logger.log('[ERROR] Gmail message read failed: ' + messageError);
-        return;
-      }
-
-      // Retain the checkpoint on failure; successful message IDs stay deduped.
-      if (errorCount > 0) {
-        return;
-      }
-      start += threads.length;
-      } while (threads.length === SYNC_PAGE_SIZE);
 
     }
   );
-
-  if (errorCount === 0) {
-    props.setProperty('LAST_SUCCESSFUL_SYNC_TIME', String(syncStartedAt));
-  }
 
 
   // ── SYNC SUMMARY ──────────────────────────────────────────
@@ -911,8 +872,8 @@ function setupTrigger() {
     );
 
 
-  // Keep scheduled ingestion and receipt fallback at five minutes.
-  var interval = 5;
+  // Install recurring trigger (default: 1 minute).
+  var interval = (typeof intervalMinutes === 'number' && intervalMinutes > 0) ? intervalMinutes : 1;
   ScriptApp
     .newTrigger(
       'syncConsentEmails'
@@ -1055,8 +1016,9 @@ function testSyncNow() {
 
 
   Logger.log(
-    'Scanning new candidate mail since the last successful sync ' +
-    '(first run only: last ' + LOOKBACK_DAYS + ' days).'
+    'Scanning last ' +
+    LOOKBACK_DAYS +
+    ' days of Gmail...'
   );
 
 
@@ -1076,10 +1038,6 @@ function checkSyncStatus() {
       .getScriptProperties()
       .getProperties();
 
-  Logger.log('Last successful sync: ' +
-    (props.LAST_SUCCESSFUL_SYNC_TIME
-      ? new Date(Number(props.LAST_SUCCESSFUL_SYNC_TIME) * 1000).toISOString()
-      : 'not yet completed'));
 
   var count =
     Object
@@ -1144,7 +1102,7 @@ function checkSyncStatus() {
 
 
   Logger.log(
-    'Initial lookback only: Last ' +
+    'Lookback window: Last ' +
     LOOKBACK_DAYS +
     ' days'
   );

@@ -35,6 +35,8 @@ def create_isolated_test_db() -> str:
 
     os.environ["DATABASE_PATH"] = temp_path
     os.environ["TEST_DATABASE_URL"] = f"sqlite:///{temp_path}"
+    os.environ.setdefault("JWT_SECRET_KEY", "test-cryptographic-jwt-secret-key-32bytes-long!")
+    os.environ.setdefault("GMAIL_WEBHOOK_SECRET", "test-gmail-webhook-secret-12345")
 
     # Strict safety check
     assert_not_production_db()

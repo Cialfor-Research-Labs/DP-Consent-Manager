@@ -46,6 +46,7 @@ from auth import (
     get_optional_user,
     require_role
 )
+from email_service import send_consent_invite
 from models import (
     DecisionPayload, 
     RevokePayload, 
@@ -1030,6 +1031,10 @@ def sync_gmail_webhook(
     payload: EmailIngestPayload,
     _authorized: bool = Depends(verify_webhook_secret)
 ):
+    # NOTE: Gmail AppScript integration is deprecated. This endpoint is kept
+    # for backward-compatibility but the primary flow now uses Resend email
+    # invites sent directly from /api/consent-requests. The endpoint still
+    # processes any incoming Gmail webhook calls if they arrive.
     # 1. Defense-in-depth guard: Ignore system-generated receipts/replies/notifications
     is_sys, sys_reason = is_system_generated_email(
         from_address=payload.from_address,
@@ -1193,6 +1198,8 @@ def ingest_email_without_debug_metadata(
     payload: EmailIngestPayload,
     _authorized: bool = Depends(verify_webhook_secret)
 ):
+    # NOTE: Deprecated — Gmail AppScript sync is replaced by Resend email invites.
+    # Kept for backward-compatibility only.
     result = strip_admin_fields(sync_gmail_webhook(payload, _authorized))
     if result.get("ignored") and result.get("reason", "").startswith("intent_"):
         return {"ignored": True, "reason": "not_a_consent_request"}
@@ -1261,7 +1268,136 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
     row = cursor.fetchone()
     result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
+
+    # ── Send consent invite email via Resend ───────────────────────────────────
+    app_base = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+    consent_link = f"{app_base}/consent/{token}"
+    email_result = send_consent_invite(
+        to_email=dp_email,
+        to_name=dp_name,
+        fiduciary_name=payload.fiduciary_name,
+        consent_link=consent_link,
+        purpose=payload.purpose,
+        attributes=payload.requested_attributes,
+        notice_id=notice_id,
+        expires_at=expires,
+    )
+    result["email_sent"] = email_result.get("success", False)
+    result["email_message"] = email_result.get("message", "")
+    result["email_dev_mode"] = email_result.get("dev_mode", False)
+    result["consent_link"] = consent_link
+    result["link"] = consent_link
+
     return result
+
+# ── PUBLIC: Fetch consent request preview without authentication ───────────────
+@app.get("/api/consent-requests/public/{token}")
+def get_public_consent_request_preview(token: str = Path(..., description="Consent invite token")):
+    """
+    Public (unauthenticated) endpoint that returns a minimal preview of the
+    consent request for the landing page shown before login.
+    Returns only non-sensitive public fields: fiduciary name, purpose, attributes list.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM consent_requests WHERE token = ? OR notice_id = ? OR id = ?;", (token, token, token))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Consent request not found or link is invalid.")
+
+    req = dict(row)
+    try:
+        attributes = json.loads(req.get("requested_attributes") or "[]")
+    except Exception:
+        attributes = []
+
+    # Return only public-safe fields — no personal data, no tokens
+    conn.close()
+    return {
+        "notice_id": req.get("notice_id", ""),
+        "fiduciary_name": req.get("fiduciary_name", ""),
+        "fiduciary_category": req.get("fiduciary_category", ""),
+        "fiduciary_logo": req.get("fiduciary_logo", "🏢"),
+        "purpose": req.get("purpose", ""),
+        "domain": req.get("domain", ""),
+        "legal_basis": req.get("legal_basis", ""),
+        "validity_period": req.get("validity_period", ""),
+        "data_region": req.get("data_region", ""),
+        "status": req.get("status", ""),
+        "expires_at": req.get("expires_at", ""),
+        "attributes": [
+            {
+                "name": a.get("name", ""),
+                "category": a.get("category", ""),
+                "sensitive": a.get("sensitive", False),
+                "required": a.get("required", False),
+            }
+            for a in attributes
+        ],
+        "token": token,
+    }
+
+
+# ── Resend consent invite email for an existing request ────────────────────────
+@app.post("/api/consent-requests/send-email/{request_id}")
+def resend_consent_email(
+    request_id: str = Path(..., description="Consent request ID or token"),
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
+    """
+    (Re)send the Resend consent invite email for an existing consent request.
+    Only accessible by authenticated Data Fiduciaries or Admins.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM consent_requests WHERE id = ? OR token = ?;", (request_id, request_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Consent request not found.")
+
+    req = dict(row)
+    # Fetch data principal email
+    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (req["data_principal_id"],))
+    dp_row = cursor.fetchone()
+    dp = dict(dp_row) if dp_row else {}
+    dp_email = dp.get("email", "")
+    dp_name = dp.get("name", "Data Principal")
+
+    try:
+        attributes = json.loads(req.get("requested_attributes") or "[]")
+    except Exception:
+        attributes = []
+
+    conn.close()
+
+    if not dp_email:
+        raise HTTPException(status_code=400, detail="No email address on record for this data principal.")
+
+    app_base = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+    consent_link = f"{app_base}/consent/{req['token']}"
+
+    email_result = send_consent_invite(
+        to_email=dp_email,
+        to_name=dp_name,
+        fiduciary_name=req.get("fiduciary_name", ""),
+        consent_link=consent_link,
+        purpose=req.get("purpose", ""),
+        attributes=attributes,
+        notice_id=req.get("notice_id", ""),
+        expires_at=req.get("expires_at", ""),
+    )
+
+    return {
+        "success": email_result.get("success", False),
+        "message": email_result.get("message", ""),
+        "email_id": email_result.get("email_id"),
+        "dev_mode": email_result.get("dev_mode", False),
+        "consent_link": consent_link,
+        "to_email": dp_email,
+    }
+
 
 @app.get("/api/consent-requests/resolve")
 def resolve_consent_request(

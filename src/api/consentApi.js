@@ -437,5 +437,42 @@ export const consentApi = {
       console.warn('Backend API nominee remove offline:', e.message);
     }
     return { success: true };
+  },
+
+  /**
+   * Fetch public (unauthenticated) consent request preview by token.
+   * Used on the consent landing page shown before login.
+   * GET /api/consent-requests/public/{token}
+   */
+  async getPublicConsentRequest(token) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/consent-requests/public/${encodeURIComponent(token)}`);
+      if (response.ok) {
+        return await response.json();
+      }
+      if (response.status === 404) {
+        return null;
+      }
+    } catch (e) {
+      console.warn('Public consent request fetch error:', e.message);
+    }
+    return null;
+  },
+
+  /**
+   * (Re)send the Resend consent invite email for an existing request.
+   * POST /api/consent-requests/send-email/{requestId}
+   */
+  async resendConsentEmail(requestId) {
+    const response = await authFetch(`${API_BASE_URL}/consent-requests/send-email/${encodeURIComponent(requestId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to resend consent email.');
+    }
+    return data;
   }
 };
+

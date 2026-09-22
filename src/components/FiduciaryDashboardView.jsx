@@ -13,7 +13,8 @@ import {
   Copy, 
   ExternalLink,
   Users,
-  Search
+  Search,
+  Mail
 } from 'lucide-react';
 
 export const FiduciaryDashboardView = () => {
@@ -25,6 +26,7 @@ export const FiduciaryDashboardView = () => {
   const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [copiedToken, setCopiedToken] = useState(null);
+  const [resendingEmail, setResendingEmail] = useState(null); // request id being resent
 
   // New Notice Dispatch Form state
   const [dispatchName, setDispatchName] = useState('');
@@ -58,7 +60,7 @@ export const FiduciaryDashboardView = () => {
 
   const handleDispatchSubmit = async (e) => {
     e.preventDefault();
-    setDispatchStatus({ type: 'loading', message: 'Generating cryptographic notice...' });
+    setDispatchStatus({ type: 'loading', message: 'Generating cryptographic notice and sending invite email...' });
     try {
       const payload = {
         fiduciary_name: dispatchFiduciary,
@@ -77,12 +79,34 @@ export const FiduciaryDashboardView = () => {
       };
 
       const res = await consentApi.createConsentRequest(payload);
+      const consentLink = res.consent_link || res.link || `${window.location.origin}/consent/${res.token}`;
+      const emailSent = res.email_sent;
+      const devMode = res.email_dev_mode;
+      const emailMsg = res.email_message || '';
+
+      let statusMsg;
+      if (emailSent && devMode) {
+        statusMsg = `Notice dispatched! Invite email printed to server console (dev mode — add RESEND_API_KEY to .env for real sending).`;
+      } else if (emailSent) {
+        statusMsg = `✅ Notice dispatched and invite email sent via Resend to ${dispatchEmail}!`;
+      } else if (emailMsg.toLowerCase().includes('domain') || emailMsg.toLowerCase().includes('verify')) {
+        statusMsg = `⚠️ Notice dispatched. Email failed: Resend requires a verified domain.\n\nGo to resend.com/domains → Add Domain → Verify DNS records → update RESEND_FROM_EMAIL in .env.\n\nThe consent link is ready to share manually below.`;
+      } else if (emailMsg) {
+        statusMsg = `⚠️ Notice dispatched but email failed: ${emailMsg.substring(0, 200)}`;
+      } else {
+        statusMsg = `Notice dispatched. Email could not be sent — check RESEND_API_KEY in .env.`;
+      }
+
       setDispatchStatus({
-        type: 'success',
-        message: `Notice dispatched successfully! Token: ${res.token}`,
-        link: `${window.location.origin}/request/${res.token}`,
-        token: res.token
+        type: emailSent ? 'success' : 'warning',
+        message: statusMsg,
+        link: consentLink,
+        token: res.token,
+        emailSent,
+        devMode,
       });
+      setDispatchName('');
+      setDispatchEmail('');
       // Refresh list
       fetchFiduciaryData();
     } catch (err) {
@@ -90,6 +114,21 @@ export const FiduciaryDashboardView = () => {
         type: 'error',
         message: err.message || 'Failed to dispatch notice.'
       });
+    }
+  };
+
+  const handleResendEmail = async (requestId) => {
+    setResendingEmail(requestId);
+    try {
+      const res = await consentApi.resendConsentEmail(requestId);
+      const msg = res.dev_mode
+        ? `Invite email printed to server console (dev mode). Add RESEND_API_KEY to .env for real sending.`
+        : `Invite email re-sent via Resend to ${res.to_email}!`;
+      alert(msg);
+    } catch (err) {
+      alert(`Failed to resend email: ${err.message}`);
+    } finally {
+      setResendingEmail(null);
     }
   };
 
@@ -337,7 +376,7 @@ export const FiduciaryDashboardView = () => {
             <tbody>
               {requests.map((r) => {
                 const dp = r.dataPrincipal || {};
-                const tokenUrl = `${window.location.origin}/request/${r.token || r.id}`;
+                const tokenUrl = `${window.location.origin}/consent/${r.token || r.id}`;
                 return (
                   <tr key={r.id || r.notice_id}>
                     <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -356,15 +395,30 @@ export const FiduciaryDashboardView = () => {
                       </span>
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(tokenUrl, r.token || r.id)}
-                        className="btn btn-secondary btn-sm"
-                        style={{ fontSize: '0.74rem', padding: '4px 8px' }}
-                      >
-                        {copiedToken === (r.token || r.id) ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
-                        <span>{copiedToken === (r.token || r.id) ? 'Copied!' : 'Copy Link'}</span>
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(tokenUrl, r.token || r.id)}
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '0.74rem', padding: '4px 8px' }}
+                        >
+                          {copiedToken === (r.token || r.id) ? <CheckCircle2 size={12} style={{ color: '#10b981' }} /> : <Copy size={12} />}
+                          <span>{copiedToken === (r.token || r.id) ? 'Copied!' : 'Copy Link'}</span>
+                        </button>
+                        {r.status === 'PENDING' && (
+                          <button
+                            type="button"
+                            onClick={() => handleResendEmail(r.id || r.token)}
+                            disabled={resendingEmail === (r.id || r.token)}
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.74rem', padding: '4px 8px', opacity: resendingEmail === (r.id || r.token) ? 0.6 : 1 }}
+                            title="Resend invite email via Resend"
+                          >
+                            <Mail size={12} />
+                            <span>{resendingEmail === (r.id || r.token) ? 'Sending...' : 'Resend Email'}</span>
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

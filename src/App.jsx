@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ConsentProvider, useConsent } from './context/ConsentContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { AuthView } from './components/AuthView';
+import { ConsentLandingView } from './components/ConsentLandingView';
 import { FiduciaryDashboardView } from './components/FiduciaryDashboardView';
 import { EmailSimulatorView } from './components/EmailSimulatorView';
 import { ConsentDecisionHub } from './components/ConsentDecisionHub';
@@ -17,9 +18,23 @@ import { GrievanceModal } from './components/GrievanceModal';
 import { NominationModal } from './components/NominationModal';
 import './styles/main.css';
 
+/**
+ * Extract a consent token from the current URL path.
+ * Supports: /consent/<token>  and  /request/<token>
+ */
+function extractConsentToken() {
+  try {
+    const path = window.location.pathname;
+    const match = path.match(/^\/(consent|request)\/([^/?#]+)/);
+    return match ? match[2] : null;
+  } catch {
+    return null;
+  }
+}
+
 const MainAppContent = () => {
   const { isAuthenticated, loading: authLoading, isDataFiduciary } = useAuth();
-  const { activeTab, toastMessage, loading, apiError } = useConsent();
+  const { activeTab, toastMessage, loading, apiError, setActiveTab, openRequestReview } = useConsent();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -31,6 +46,11 @@ const MainAppContent = () => {
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
+  // Consent link token from URL (e.g. /consent/<token>)
+  const [consentToken, setConsentToken] = useState(() => extractConsentToken());
+  // When true, we show the full AuthView (after user clicks "Log in" on landing page)
+  const [showingAuthFromLanding, setShowingAuthFromLanding] = useState(false);
+
   const toggleSidebarCollapse = () => {
     setSidebarCollapsed(prev => {
       const next = !prev;
@@ -40,6 +60,62 @@ const MainAppContent = () => {
       return next;
     });
   };
+
+  /**
+   * When user clicks "Log in" on the landing page, remember the token and
+   * show the auth view. After login, we'll redirect to the consent hub.
+   */
+  const handleProceedToLogin = (token) => {
+    if (token) {
+      try {
+        sessionStorage.setItem('dp_pending_consent_token', token);
+      } catch {}
+    }
+    setShowingAuthFromLanding(true);
+  };
+
+  /**
+   * After a successful login, check if there's a pending consent token
+   * and navigate to that consent request automatically.
+   */
+  useEffect(() => {
+    if (isAuthenticated && !isDataFiduciary) {
+      const pendingToken = (() => {
+        try { return sessionStorage.getItem('dp_pending_consent_token'); } catch { return null; }
+      })();
+      if (pendingToken) {
+        try { sessionStorage.removeItem('dp_pending_consent_token'); } catch {}
+        // Clear the URL without reload
+        try {
+          if (window.location.pathname !== '/') {
+            window.history.replaceState({}, '', '/');
+          }
+        } catch {}
+        setConsentToken(null);
+        setShowingAuthFromLanding(false);
+        // Open the specific consent request for review
+        if (openRequestReview) {
+          openRequestReview(pendingToken);
+        } else if (setActiveTab) {
+          setActiveTab('incoming');
+        }
+      } else if (consentToken && isAuthenticated) {
+        // User was already logged in and opened the link
+        try {
+          if (window.location.pathname !== '/') {
+            window.history.replaceState({}, '', '/');
+          }
+        } catch {}
+        const tokenToOpen = consentToken;
+        setConsentToken(null);
+        if (openRequestReview) {
+          openRequestReview(tokenToOpen);
+        } else if (setActiveTab) {
+          setActiveTab('incoming');
+        }
+      }
+    }
+  }, [isAuthenticated, isDataFiduciary, consentToken, setActiveTab, openRequestReview]);
 
   if (authLoading) {
     return (
@@ -56,6 +132,21 @@ const MainAppContent = () => {
           <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 600 }}>Verifying secure session...</span>
         </div>
       </div>
+    );
+  }
+
+  // ── CONSENT LINK FLOW ──────────────────────────────────────────────────────
+  // If the URL has a consent token and the user is NOT yet authenticated,
+  // show the public landing page first (or the auth view if they clicked login).
+  if (consentToken && !isAuthenticated) {
+    if (showingAuthFromLanding) {
+      return <AuthView consentToken={consentToken} />;
+    }
+    return (
+      <ConsentLandingView
+        token={consentToken}
+        onProceedToLogin={handleProceedToLogin}
+      />
     );
   }
 

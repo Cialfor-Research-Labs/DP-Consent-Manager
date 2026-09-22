@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-# Logs
+# Node / Frontend
 logs
 *.log
 npm-debug.log*
@@ -23,7 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-=======
+
+# Python
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -242,7 +242,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
->>>>>>> f6a62903aaee8342dde9b2baa3dda9d79cdc1ed5
 
 
 *.db.bak

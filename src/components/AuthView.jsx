@@ -2,8 +2,15 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Shield, Lock, Mail, User, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 
-export const AuthView = () => {
+export const AuthView = ({ consentToken = null }) => {
   const { login, register, authError, setAuthError } = useAuth();
+
+  // If a consentToken was passed, persist it so App.jsx post-login redirect works
+  React.useEffect(() => {
+    if (consentToken) {
+      try { sessionStorage.setItem('dp_pending_consent_token', consentToken); } catch {}
+    }
+  }, [consentToken]);
 
   const [mode, setMode] = useState('login'); // 'login' or 'register'
   const [loading, setLoading] = useState(false);
@@ -102,10 +109,7 @@ export const AuthView = () => {
 
   const errorMessage = localError || authError;
 
-  const isDirectAccessAttempt = typeof window !== 'undefined' && Boolean(
-    window.location.pathname.startsWith('/request/') ||
-    new URLSearchParams(window.location.search).get('token')
-  );
+  const showConsentNotice = Boolean(consentToken);
 
   return (
     <div className="auth-page-container">
@@ -142,8 +146,8 @@ export const AuthView = () => {
         </div>
 
         <div className="auth-body">
-          {/* Direct Access Notification */}
-          {isDirectAccessAttempt && !errorMessage && (
+          {/* Consent-context Notification */}
+          {showConsentNotice && !errorMessage && (
             <div style={{
               background: 'var(--accent-soft)',
               border: '1px solid var(--border-highlight)',
@@ -158,7 +162,7 @@ export const AuthView = () => {
               fontWeight: 600
             }}>
               <Shield size={18} style={{ flexShrink: 0 }} />
-              <span>Authentication Required: Please sign in or create an account to view and decide on this statutory consent request.</span>
+              <span>Please sign in or create an account to review and respond to your consent request.</span>
             </div>
           )}
 

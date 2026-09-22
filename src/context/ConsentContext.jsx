@@ -299,7 +299,8 @@ export const ConsentProvider = ({ children }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUserId]);
 
-  // Periodic background polling: ensures newly arrived Gmail requests automatically appear on dashboard
+  // Periodic background polling: refresh consent requests every 60 seconds
+  // (reduced from 5s — Resend direct invite flow removes the need for frequent polling)
   useEffect(() => {
     if (!authUserId) return;
     const pollInterval = setInterval(() => {
@@ -328,10 +329,11 @@ export const ConsentProvider = ({ children }) => {
       }).catch(() => {
         // Silent catch for background poll to avoid intrusive error banners
       });
-    }, 5000);
+    }, 60000); // 60 seconds — no need for aggressive polling with Resend flow
 
     return () => clearInterval(pollInterval);
   }, [authUserId]);
+
 
   // Popstate navigation listener: synchronizes browser back/forward buttons with tab & scenario state
   useEffect(() => {
@@ -359,8 +361,8 @@ export const ConsentProvider = ({ children }) => {
   // Async token resolution effect from backend Python REST API
   useEffect(() => {
     const pathname = window.location.pathname;
-    const pathTokenMatch = pathname.match(/\/request\/([^/]+)/);
-    const pathToken = pathTokenMatch ? pathTokenMatch[1] : null;
+    const pathTokenMatch = pathname.match(/\/(consent|request)\/([^/?#]+)/);
+    const pathToken = pathTokenMatch ? pathTokenMatch[2] : null;
 
     const params = new URLSearchParams(window.location.search);
     const tokenParam = params.get('token') || pathToken;

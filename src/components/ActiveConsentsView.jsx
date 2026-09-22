@@ -11,9 +11,8 @@ import {
   HeartPulse,
   CreditCard,
   Landmark,
-  Calendar,
   Clock,
-  Filter
+  FileText
 } from 'lucide-react';
 
 export const ActiveConsentsView = () => {
@@ -22,7 +21,7 @@ export const ActiveConsentsView = () => {
     revokeConsent, 
     setGrievanceTarget, 
     setGrievanceModalOpen,
-    t 
+    setLatestReceipt
   } = useConsent();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -36,12 +35,18 @@ export const ActiveConsentsView = () => {
     const cid = (c.consentId || c.consent_id || '').toLowerCase();
     const term = (searchTerm || '').toLowerCase();
     const matchesSearch = fid.includes(term) || purp.includes(term) || cid.includes(term);
-    const matchesStatus = filterStatus === 'ALL' || c.status === filterStatus;
+    const matchesStatus = filterStatus === 'ALL' || c.status === filterStatus || (filterStatus === 'REVOKED' && c.status === 'WITHDRAWN');
     return matchesSearch && matchesStatus;
   });
 
   const activeCount = activeConsents.filter(c => c.status === 'ACTIVE').length;
-  const revokedCount = activeConsents.filter(c => c.status === 'REVOKED').length;
+  const revokedCount = activeConsents.filter(c => c.status === 'REVOKED' || c.status === 'WITHDRAWN').length;
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? String(dateStr) : d.toLocaleDateString();
+  };
 
   const handleRevokeSubmit = async (e) => {
     e.preventDefault();
@@ -175,7 +180,17 @@ export const ActiveConsentsView = () => {
           const consentId = consent.consentId || consent.consent_id || `CNST-REC-${cardIdx}`;
           const grantedAttrs = Array.isArray(consent.grantedAttributes)
             ? consent.grantedAttributes
-            : (typeof consent.granted_attributes === 'string' ? JSON.parse(consent.granted_attributes || '[]') : (consent.granted_attributes || []));
+            : (() => {
+                if (typeof consent.granted_attributes === 'string') {
+                  try {
+                    const parsed = JSON.parse(consent.granted_attributes);
+                    return Array.isArray(parsed) ? parsed : [parsed];
+                  } catch {
+                    return [consent.granted_attributes];
+                  }
+                }
+                return consent.granted_attributes || [];
+              })();
           const noticeId = consent.noticeId || consent.notice_id || 'NTC-GENERAL';
           const grantedDate = consent.grantedOn || consent.granted_on;
           const expiresDate = consent.expiresOn || consent.expires_on;
@@ -225,14 +240,43 @@ export const ActiveConsentsView = () => {
 
                 {/* Metadata Row */}
                 <div className="record-meta-footer">
-                  <span>Granted: {grantedDate ? new Date(grantedDate).toLocaleDateString() : 'Active'}</span>
-                  {expiresDate && <span>Expires: {new Date(expiresDate).toLocaleDateString()}</span>}
+                  <span>Granted: {grantedDate ? formatDate(grantedDate) : 'Active'}</span>
+                  {expiresDate && <span>Expires: {formatDate(expiresDate)}</span>}
                   <span>Consent ID: <code className="code-accent">{consentId}</code></span>
                 </div>
               </div>
 
               {/* Action Toolbar */}
               <div className="record-actions-row">
+                <button 
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setLatestReceipt({
+                      consentId: consent.consentId || consent.consent_id || consentId,
+                      principalName: consent.principalName || consent.principal_name || 'Data Principal',
+                      principalEmail: consent.principalEmail || consent.principal_email || '',
+                      principalId: consent.principalId || consent.data_principal_id || '',
+                      fiduciary: consent.fiduciary || consent.fiduciary_name || 'Data Fiduciary',
+                      purpose: consent.purpose,
+                      noticeId: noticeId,
+                      legalBasis: consent.legalBasis || consent.legal_basis || 'Consent under DPDP Act 2023 (Section 6)',
+                      grantedOn: grantedDate,
+                      expiresOn: expiresDate,
+                      grantedAttributes: grantedAttrs,
+                      deniedAttributes: Array.isArray(consent.deniedAttributes)
+                        ? consent.deniedAttributes
+                        : (typeof consent.denied_attributes === 'string' ? JSON.parse(consent.denied_attributes || '[]') : (consent.denied_attributes || [])),
+                      sha256IntegrityHash: consent.receiptHash || consent.receipt_hash || '',
+                      receiptHash: consent.receiptHash || consent.receipt_hash || '',
+                      verifiedSignature: consent.receiptHash || consent.receipt_hash || ''
+                    });
+                  }}
+                >
+                  <FileText size={15} />
+                  <span>View Receipt</span>
+                </button>
+
                 {isActive ? (
                   <button 
                     type="button"

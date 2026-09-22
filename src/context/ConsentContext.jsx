@@ -402,7 +402,7 @@ export const ConsentProvider = ({ children }) => {
     }).catch(err => {
       console.warn("Failed to fetch token request from API:", err);
     });
-  }, []);
+  }, [authUserId]);
 
   // Sync state to local storage for persistence across reloads
   useEffect(() => {

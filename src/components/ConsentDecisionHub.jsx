@@ -34,8 +34,7 @@ export const ConsentDecisionHub = () => {
     setGrievanceModalOpen, 
     setGrievanceTarget,
     setActiveTab,
-    language,
-    t 
+    language
   } = useConsent();
 
   const [note, setNote] = useState('');
@@ -221,7 +220,7 @@ export const ConsentDecisionHub = () => {
                   if (window.location.pathname !== '/') {
                     window.history.pushState({}, '', '/');
                   }
-                } catch (e) {}
+                } catch {}
                 setActiveTab('dashboard');
               }}
             >
@@ -256,7 +255,7 @@ export const ConsentDecisionHub = () => {
             if (window.location.pathname !== '/') {
               window.history.pushState({}, '', '/');
             }
-          } catch (e) {}
+          } catch {}
           setActiveTab('dashboard');
         }}
       >

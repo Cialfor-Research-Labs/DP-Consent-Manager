@@ -1,9 +1,9 @@
 import React from 'react';
 import { useConsent } from '../context/ConsentContext';
-import { History, ShieldCheck, FileText, CheckCircle2, XCircle, AlertTriangle, Lock } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, Lock } from 'lucide-react';
 
 export const AuditLogView = () => {
-  const { auditLogs, dataPrincipal, t } = useConsent();
+  const { auditLogs, t } = useConsent();
 
   return (
     <div className="audit-log-container">

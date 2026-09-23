@@ -271,7 +271,7 @@ export const AuthView = ({ consentToken = null }) => {
                     className="auth-demo-card"
                   >
                     <div>
-                      <strong style={{ color: 'var(--text-primary)' }}>Prerna Pandey</strong> (Data Principal)
+                      <strong style={{ color: 'var(--text-primary)' }}>Prerna Pandey</strong> (Data Fiduciary)
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>pandeyprerna1407@gmail.com</div>
                     </div>
                     <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 700 }}>Fill &rarr;</span>

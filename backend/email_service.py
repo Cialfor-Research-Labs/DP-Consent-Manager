@@ -19,10 +19,13 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_FILE = os.path.join(ROOT_DIR, ".env")
+
 
 def _get_resend_config():
     """Lazily reads email & Resend config from environment (always reflects current .env)."""
-    load_dotenv()  # no-op if already loaded; ensures .env is present even when called before main.py loads it
+    load_dotenv(dotenv_path=ENV_FILE, override=True)  # guarantees loading root .env dynamically
     return {
         "api_key": os.getenv("RESEND_API_KEY", ""),
         "from_email": os.getenv("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
@@ -230,8 +233,8 @@ def send_consent_invite(
 
     subject = f"[Action Required] Consent Request from {fiduciary_name} — DPDP Act 2023"
 
-    smtp_user = cfg.get("smtp_user", "")
-    smtp_pass = cfg.get("smtp_pass", "")
+    smtp_user = str(cfg.get("smtp_user", "")).strip()
+    smtp_pass = str(cfg.get("smtp_pass", "")).strip().replace(" ", "")
     smtp_host = cfg.get("smtp_host", "smtp.gmail.com")
     smtp_port = cfg.get("smtp_port", 587)
 

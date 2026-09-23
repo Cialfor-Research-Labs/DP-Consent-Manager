@@ -86,15 +86,15 @@ export const FiduciaryDashboardView = () => {
 
       let statusMsg;
       if (emailSent && devMode) {
-        statusMsg = `Notice dispatched! Invite email printed to server console (dev mode — add RESEND_API_KEY to .env for real sending).`;
+        statusMsg = `Notice dispatched! Invite email printed to server console (dev mode — add GMAIL_USER / GMAIL_APP_PASSWORD to .env for real sending).`;
       } else if (emailSent) {
-        statusMsg = `✅ Notice dispatched and invite email sent via Resend to ${dispatchEmail}!`;
+        statusMsg = `✅ Notice dispatched and invite email sent successfully to ${dispatchEmail}!`;
       } else if (emailMsg.toLowerCase().includes('domain') || emailMsg.toLowerCase().includes('verify')) {
-        statusMsg = `⚠️ Notice dispatched. Email failed: Resend requires a verified domain.\n\nGo to resend.com/domains → Add Domain → Verify DNS records → update RESEND_FROM_EMAIL in .env.\n\nThe consent link is ready to share manually below.`;
+        statusMsg = `⚠️ Notice dispatched. Email failed: Resend requires a verified domain.\n\nGo to resend.com/domains → Add Domain → Verify DNS records → update RESEND_FROM_EMAIL in .env, OR use direct Gmail SMTP in .env.\n\nThe consent link is ready to share manually below.`;
       } else if (emailMsg) {
-        statusMsg = `⚠️ Notice dispatched but email failed: ${emailMsg.substring(0, 200)}`;
+        statusMsg = `⚠️ Notice dispatched but email delivery failed: ${emailMsg.substring(0, 200)}`;
       } else {
-        statusMsg = `Notice dispatched. Email could not be sent — check RESEND_API_KEY in .env.`;
+        statusMsg = `Notice dispatched. Email could not be sent — check GMAIL_USER/GMAIL_APP_PASSWORD or RESEND_API_KEY in .env.`;
       }
 
       setDispatchStatus({
@@ -121,9 +121,13 @@ export const FiduciaryDashboardView = () => {
     setResendingEmail(requestId);
     try {
       const res = await consentApi.resendConsentEmail(requestId);
+      if (!res.success && !res.dev_mode) {
+        alert(`⚠️ Email delivery failed: ${res.message || 'Unknown error'}`);
+        return;
+      }
       const msg = res.dev_mode
-        ? `Invite email printed to server console (dev mode). Add RESEND_API_KEY to .env for real sending.`
-        : `Invite email re-sent via Resend to ${res.to_email}!`;
+        ? `Invite email printed to server console (dev mode). Add RESEND_API_KEY or GMAIL_USER/GMAIL_APP_PASSWORD to .env for real sending.`
+        : `Invite email sent successfully to ${res.to_email || 'recipient'}!`;
       alert(msg);
     } catch (err) {
       alert(`Failed to resend email: ${err.message}`);

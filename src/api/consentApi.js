@@ -208,9 +208,15 @@ export const consentApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const data = await response.json();
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { detail: text || `Server error (${response.status})` };
+    }
     if (!response.ok) {
-      throw new Error(data.detail || 'Failed to create consent request notice.');
+      throw new Error(data.detail || data.message || 'Failed to create consent request notice.');
     }
     return data;
   },

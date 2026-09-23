@@ -329,7 +329,7 @@ export const ConsentProvider = ({ children }) => {
       }).catch(() => {
         // Silent catch for background poll to avoid intrusive error banners
       });
-    }, 60000); // 60 seconds — no need for aggressive polling with Resend flow
+    }, 5000); // 5000ms responsive polling interval for incoming consent notices
 
     return () => clearInterval(pollInterval);
   }, [authUserId]);

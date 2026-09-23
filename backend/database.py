@@ -352,7 +352,7 @@ def seed_users(cursor):
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, [
         ("USR-DEMO-001", "rahul.verma@delhiuniv.ac.in", "Rahul Verma", dp_hash, "DATA_PRINCIPAL", dp_rahul_id, None, now_iso, now_iso),
-        ("USR-DEMO-002", "pandeyprerna1407@gmail.com", "Prerna Pandey", dp_hash, "DATA_PRINCIPAL", dp_prerna_id, None, now_iso, now_iso),
+        ("USR-DEMO-002", "pandeyprerna1407@gmail.com", "Prerna Pandey", dp_hash, "DATA_FIDUCIARY", None, "Cialfor Research Labs Private Limited", now_iso, now_iso),
         ("USR-DEMO-003", "admin@cialfor.com", "Compliance Officer", admin_hash, "DATA_FIDUCIARY", None, "Cialfor Research Labs Private Limited", now_iso, now_iso),
     ])
 

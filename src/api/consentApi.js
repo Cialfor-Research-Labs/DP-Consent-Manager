@@ -222,6 +222,29 @@ export const consentApi = {
   },
 
   /**
+   * Create bulk consent requests in batch (Data Fiduciary / Admin only)
+   * POST /api/consent-requests/bulk
+   */
+  async createBulkConsentRequests(payload) {
+    const response = await authFetch(`${API_BASE_URL}/consent-requests/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { detail: text || `Server error (${response.status})` };
+    }
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || 'Failed to dispatch bulk consent notices.');
+    }
+    return data;
+  },
+
+  /**
    * Fetch active consents from backend
    * GET /api/consents
    */

@@ -1,3 +1,4 @@
+import socket
 import os
 import re
 import json
@@ -18,6 +19,37 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 
 logger = logging.getLogger(__name__)
+
+
+def get_hosted_base_url(request: Optional[Request] = None) -> str:
+    """
+    Resolves the reachable base URL for the hosted application.
+    Prioritizes explicit non-localhost APP_BASE_URL from environment,
+    or falls back to detecting the host machine's LAN IP address so links
+    in emails work on devices connected to the same Wi-Fi/network.
+    """
+    env_base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
+    if env_base and not ("localhost" in env_base or "127.0.0.1" in env_base):
+        return env_base
+
+    if request:
+        host_header = request.headers.get("host")
+        if host_header and not (host_header.startswith("localhost") or host_header.startswith("127.0.0.1")):
+            proto = request.headers.get("x-forwarded-proto", "http")
+            return f"{proto}://{host_header}".rstrip("/")
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        host_ip = s.getsockname()[0]
+        s.close()
+        if host_ip and host_ip != "127.0.0.1":
+            port = os.getenv("PORT", "8000")
+            return f"http://{host_ip}:{port}"
+    except Exception:
+        pass
+
+    return env_base or f"http://localhost:{os.getenv('PORT', '8000')}"
 
 from consent_intent_detector import (
     detect_consent_intent,
@@ -89,7 +121,7 @@ if env_origins:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:[0-9]+)?",
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:[0-9]+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1207,7 +1239,11 @@ def ingest_email_without_debug_metadata(
 
 
 @app.post("/api/consent-requests")
-def create_consent_request(payload: ConsentRequestCreatePayload, current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))):
+def create_consent_request(
+    payload: ConsentRequestCreatePayload,
+    request: Request = None,
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1269,8 +1305,8 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
     result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
 
-    # ── Send consent invite email via Resend ───────────────────────────────────
-    app_base = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+    # ── Send consent invite email with hosted laptop IP & port link ───────────
+    app_base = get_hosted_base_url(request)
     consent_link = f"{app_base}/consent/{token}"
     email_result = send_consent_invite(
         to_email=dp_email,
@@ -1295,8 +1331,8 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
 def get_public_consent_request_preview(token: str = Path(..., description="Consent invite token")):
     """
     Public (unauthenticated) endpoint that returns a minimal preview of the
-    consent request for the landing page shown before login.
-    Returns only non-sensitive public fields: fiduciary name, purpose, attributes list.
+    consent request for the login page shown when recipient clicks the link.
+    Returns safe public fields and recipient identity hint for frictionless login/registration.
     """
     conn = get_db()
     cursor = conn.cursor()
@@ -1312,7 +1348,16 @@ def get_public_consent_request_preview(token: str = Path(..., description="Conse
     except Exception:
         attributes = []
 
-    # Return only public-safe fields — no personal data, no tokens
+    # Look up data principal name and email to support seamless login/registration
+    dp_name = ""
+    dp_email = ""
+    if req.get("data_principal_id"):
+        cursor.execute("SELECT name, email FROM data_principals WHERE id = ?;", (req["data_principal_id"],))
+        dp_row = cursor.fetchone()
+        if dp_row:
+            dp_name = dp_row["name"] or ""
+            dp_email = dp_row["email"] or ""
+
     conn.close()
     return {
         "notice_id": req.get("notice_id", ""),
@@ -1326,6 +1371,8 @@ def get_public_consent_request_preview(token: str = Path(..., description="Conse
         "data_region": req.get("data_region", ""),
         "status": req.get("status", ""),
         "expires_at": req.get("expires_at", ""),
+        "principal_name": dp_name,
+        "principal_email": dp_email,
         "attributes": [
             {
                 "name": a.get("name", ""),
@@ -1343,6 +1390,7 @@ def get_public_consent_request_preview(token: str = Path(..., description="Conse
 @app.post("/api/consent-requests/send-email/{request_id}")
 def resend_consent_email(
     request_id: str = Path(..., description="Consent request ID or token"),
+    request: Request = None,
     current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
 ):
     """
@@ -1375,7 +1423,7 @@ def resend_consent_email(
     if not dp_email:
         raise HTTPException(status_code=400, detail="No email address on record for this data principal.")
 
-    app_base = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+    app_base = get_hosted_base_url(request)
     consent_link = f"{app_base}/consent/{req['token']}"
 
     email_result = send_consent_invite(

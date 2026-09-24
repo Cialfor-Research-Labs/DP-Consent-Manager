@@ -17,10 +17,29 @@ import urllib.error
 from datetime import datetime
 from dotenv import load_dotenv
 
+import socket
+
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_FILE = os.path.join(ROOT_DIR, ".env")
+
+
+def _detect_host_base_url() -> str:
+    env_base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
+    if env_base and not ("localhost" in env_base or "127.0.0.1" in env_base):
+        return env_base
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        host_ip = s.getsockname()[0]
+        s.close()
+        if host_ip and host_ip != "127.0.0.1":
+            port = os.getenv("PORT", "8000")
+            return f"http://{host_ip}:{port}"
+    except Exception:
+        pass
+    return env_base or f"http://localhost:{os.getenv('PORT', '8000')}"
 
 
 def _get_resend_config():
@@ -30,7 +49,7 @@ def _get_resend_config():
         "api_key": os.getenv("RESEND_API_KEY", ""),
         "from_email": os.getenv("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
         "from_name": os.getenv("RESEND_FROM_NAME", "DPDP Consent Manager"),
-        "app_base_url": os.getenv("APP_BASE_URL", "http://localhost:8000"),
+        "app_base_url": _detect_host_base_url(),
         # Optional direct SMTP (e.g. Gmail App Password — bypasses domain verification requirement)
         "smtp_host": os.getenv("SMTP_HOST", "smtp.gmail.com"),
         "smtp_port": int(os.getenv("SMTP_PORT", "587")),
@@ -279,14 +298,14 @@ def send_consent_invite(
             "  To: %s <%s>\n  Subject: %s\n  Consent Link: %s",
             to_name, to_email, subject, consent_link,
         )
-        print("\n" + "═" * 72)
-        print("📧  DEV MODE EMAIL (would be sent via Resend/SMTP in production)")
-        print("═" * 72)
+        print("\n" + "=" * 72)
+        print("[EMAIL SERVICE - DEV MODE] (would be sent via Resend/SMTP in production)")
+        print("=" * 72)
         print(f"  To:      {to_name} <{to_email}>")
         print(f"  From:    {from_name} <{from_email}>")
         print(f"  Subject: {subject}")
         print(f"  Link:    {consent_link}")
-        print("═" * 72 + "\n")
+        print("=" * 72 + "\n")
         return {"success": True, "message": "Dev mode — email printed to console.", "email_id": None, "dev_mode": True}
 
     # ── PRODUCTION MODE: send via Resend API ───────────────────────────────────

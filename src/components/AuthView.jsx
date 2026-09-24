@@ -1,14 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Shield, Lock, Mail, User, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
+import { consentApi } from '../api/consentApi';
+import { Shield, Lock, Mail, User, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle, Building2, FileText } from 'lucide-react';
 
 export const AuthView = ({ consentToken = null }) => {
   const { login, register, authError, setAuthError } = useAuth();
+  const [requestPreview, setRequestPreview] = useState(null);
 
-  // If a consentToken was passed, persist it so App.jsx post-login redirect works
-  React.useEffect(() => {
+  // If a consentToken was passed, persist it so App.jsx post-login redirect works,
+  // and fetch the public preview to provide context and pre-fill the recipient's email
+  useEffect(() => {
     if (consentToken) {
       try { sessionStorage.setItem('dp_pending_consent_token', consentToken); } catch {}
+      consentApi.getPublicConsentRequest(consentToken).then(data => {
+        if (data) {
+          setRequestPreview(data);
+          if (data.principal_email) {
+            setEmail(prev => prev || data.principal_email);
+          }
+          if (data.principal_name) {
+            setName(prev => prev || data.principal_name);
+          }
+        }
+      }).catch(() => {});
     }
   }, [consentToken]);
 
@@ -149,20 +163,31 @@ export const AuthView = ({ consentToken = null }) => {
           {/* Consent-context Notification */}
           {showConsentNotice && !errorMessage && (
             <div style={{
-              background: 'var(--accent-soft)',
-              border: '1px solid var(--border-highlight)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '12px 14px',
+              background: 'rgba(99, 102, 241, 0.08)',
+              border: '1px solid rgba(99, 102, 241, 0.3)',
+              borderRadius: '12px',
+              padding: '14px 16px',
               marginBottom: '18px',
               display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              color: 'var(--accent-primary)',
-              fontSize: '0.84rem',
-              fontWeight: 600
+              flexDirection: 'column',
+              gap: '6px',
             }}>
-              <Shield size={18} style={{ flexShrink: 0 }} />
-              <span>Please sign in or create an account to review and respond to your consent request.</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 700, fontSize: '0.86rem' }}>
+                <Shield size={17} style={{ flexShrink: 0 }} />
+                <span>Statutory DPDP Consent Request</span>
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                {requestPreview ? (
+                  <span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{requestPreview.fiduciary_name}</strong> has dispatched a consent request notice for: <span style={{ color: 'var(--text-primary)', fontStyle: 'italic' }}>"{requestPreview.purpose}"</span>.
+                  </span>
+                ) : (
+                  <span>You have received a statutory DPDP consent invitation notice.</span>
+                )}
+              </div>
+              <p style={{ margin: '4px 0 0', fontSize: '0.76rem', color: '#a5b4fc', fontWeight: 600 }}>
+                Sign in or create an account to view requested data attributes and grant consent.
+              </p>
             </div>
           )}
 

@@ -281,8 +281,16 @@ export const ConsentProvider = ({ children }) => {
   const authUserId = authUser?.id || null;
   useEffect(() => {
     if (authUserId) {
-      // User is authenticated — ensure role-based landing tab is dashboard
-      setActiveTab('dashboard');
+      // User is authenticated — check if there is a pending consent request to review
+      const hasPendingToken = (() => {
+        try {
+          return sessionStorage.getItem('dp_pending_consent_token') ||
+                 window.location.pathname.match(/\/(consent|request)\/([^/?#]+)/);
+        } catch { return false; }
+      })();
+      if (!hasPendingToken) {
+        setActiveTab('dashboard');
+      }
       refetchBackendData();
     } else {
       // No user — reset all session-specific state to clean defaults so

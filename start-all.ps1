@@ -95,17 +95,25 @@ Write-Host ""
 # ── 2. PRE-FLIGHT: PYTHON DETECTION ──────────────────────────────────────────
 Write-Info "Checking Python environment..."
 $PythonCmd = $null
-if (Get-Command python3 -ErrorAction SilentlyContinue) {
-    $PythonCmd = "python3"
-} elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    $PythonCmd = "python"
-} else {
-    Write-ErrMsg "Python 3 is required but not found in PATH."
-    Write-ErrMsg "Please install Python 3.9+ from https://www.python.org/downloads/"
+$PyVersionOutput = ""
+$Candidates = @("python", "py", "python3")
+foreach ($cmd in $Candidates) {
+    if (Get-Command $cmd -ErrorAction SilentlyContinue) {
+        $ver = (& $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $ver) {
+            $PythonCmd = $cmd
+            $PyVersionOutput = $ver.Trim()
+            break
+        }
+    }
+}
+
+if (-not $PythonCmd) {
+    Write-ErrMsg "Python 3 is required but not found or not functional in PATH."
+    Write-ErrMsg "Please install Python 3.9+ from https://www.python.org/downloads/ (ensure 'Add python.exe to PATH' is checked)."
     exit 1
 }
 
-$PyVersionOutput = (& $PythonCmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')" 2>&1).Trim()
 & $PythonCmd -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" 2>$null
 
 if ($LASTEXITCODE -ne 0) {

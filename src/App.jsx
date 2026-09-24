@@ -26,7 +26,9 @@ function extractConsentToken() {
   try {
     const path = window.location.pathname;
     const match = path.match(/^\/(consent|request)\/([^/?#]+)/);
-    return match ? match[2] : null;
+    if (match) return match[2];
+    const params = new URLSearchParams(window.location.search);
+    return params.get('token') || params.get('consent_token');
   } catch {
     return null;
   }
@@ -137,17 +139,9 @@ const MainAppContent = () => {
 
   // ── CONSENT LINK FLOW ──────────────────────────────────────────────────────
   // If the URL has a consent token and the user is NOT yet authenticated,
-  // show the public landing page first (or the auth view if they clicked login).
+  // take the user directly to the login page (AuthView) with the consent request context.
   if (consentToken && !isAuthenticated) {
-    if (showingAuthFromLanding) {
-      return <AuthView consentToken={consentToken} />;
-    }
-    return (
-      <ConsentLandingView
-        token={consentToken}
-        onProceedToLogin={handleProceedToLogin}
-      />
-    );
+    return <AuthView consentToken={consentToken} />;
   }
 
   // Prevent direct access to protected frontend routes/views without authentication

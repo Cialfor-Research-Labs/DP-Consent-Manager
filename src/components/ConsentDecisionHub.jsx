@@ -441,6 +441,7 @@ export const ConsentDecisionHub = () => {
             <div className="review-action-toolbar">
               <button 
                 type="button"
+                id="submit-consent-btn"
                 className="btn btn-primary btn-grant-main"
                 onClick={handleGrant}
                 disabled={isSubmitting || selectedCount === 0}
@@ -453,7 +454,7 @@ export const ConsentDecisionHub = () => {
                 ) : (
                   <>
                     <CheckCircle2 size={18} />
-                    <span>Grant Selected Consent ({selectedCount} Attributes)</span>
+                    <span>Submit Consent ({selectedCount} Attributes)</span>
                   </>
                 )}
               </button>

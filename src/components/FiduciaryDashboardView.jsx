@@ -14,13 +14,17 @@ import {
   ExternalLink,
   Users,
   Search,
-  Mail
+  Mail,
+  Sparkles,
+  FileSpreadsheet,
+  GraduationCap
 } from 'lucide-react';
+import { BulkNoticeDispatcher } from './BulkNoticeDispatcher';
 
 export const FiduciaryDashboardView = () => {
   const { user } = useAuth();
 
-  const [activeSubTab, setActiveSubTab] = useState('requests'); // 'requests', 'consents', 'dispatch', 'audit'
+  const [activeSubTab, setActiveSubTab] = useState('requests'); // 'requests', 'consents', 'bulk', 'dispatch', 'audit'
   const [requests, setRequests] = useState([]);
   const [consents, setConsents] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
@@ -197,27 +201,46 @@ export const FiduciaryDashboardView = () => {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('dispatch')}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '10px 18px',
-            borderRadius: '12px',
-            border: 'none',
-            background: 'var(--accent-gradient)',
-            color: '#ffffff',
-            fontWeight: 600,
-            fontSize: '0.88rem',
-            cursor: 'pointer',
-            boxShadow: '0 4px 14px rgba(99, 102, 241, 0.3)'
-          }}
-        >
-          <Plus size={16} />
-          <span>Dispatch New Consent Notice</span>
-        </button>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('bulk')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 18px',
+              borderRadius: '12px',
+              border: 'none',
+              background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
+              color: '#ffffff',
+              fontWeight: 700,
+              fontSize: '0.88rem',
+              cursor: 'pointer',
+              boxShadow: '0 4px 14px rgba(168, 85, 247, 0.35)'
+            }}
+          >
+            <Sparkles size={16} />
+            <span>🚀 Automated Bulk Dispatch (Excel / Group)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('dispatch')}
+            className="btn btn-secondary"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 16px',
+              fontSize: '0.88rem',
+              fontWeight: 600
+            }}
+          >
+            <Plus size={16} />
+            <span>Single Notice</span>
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -293,7 +316,8 @@ export const FiduciaryDashboardView = () => {
         gap: '10px',
         borderBottom: '1px solid var(--border-color)',
         paddingBottom: '12px',
-        marginBottom: '24px'
+        marginBottom: '24px',
+        flexWrap: 'wrap'
       }}>
         <button
           type="button"
@@ -331,6 +355,27 @@ export const FiduciaryDashboardView = () => {
 
         <button
           type="button"
+          onClick={() => setActiveSubTab('bulk')}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '10px',
+            border: 'none',
+            background: activeSubTab === 'bulk' ? 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)' : 'rgba(168, 85, 247, 0.1)',
+            color: activeSubTab === 'bulk' ? '#ffffff' : '#c084fc',
+            fontWeight: 700,
+            fontSize: '0.88rem',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          <Sparkles size={15} />
+          <span>Automated Bulk Dispatch (Excel / Group)</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveSubTab('dispatch')}
           style={{
             padding: '8px 16px',
@@ -343,7 +388,7 @@ export const FiduciaryDashboardView = () => {
             cursor: 'pointer'
           }}
         >
-          Notice Dispatcher
+          Single Notice Dispatcher
         </button>
 
         <button
@@ -363,6 +408,15 @@ export const FiduciaryDashboardView = () => {
           Compliance Audit Log ({auditLogs.length})
         </button>
       </div>
+
+      {/* SUB-VIEW 0: AUTOMATED BULK NOTICE DISPATCHER */}
+      {activeSubTab === 'bulk' && (
+        <BulkNoticeDispatcher
+          user={user}
+          onDispatched={fetchFiduciaryData}
+          onSwitchTab={setActiveSubTab}
+        />
+      )}
 
       {/* SUB-VIEW 1: DISPATCHED REQUESTS TABLE */}
       {activeSubTab === 'requests' && (
@@ -544,6 +598,7 @@ export const FiduciaryDashboardView = () => {
                 onChange={(e) => setDispatchDomain(e.target.value)}
                 className="form-select"
               >
+                <option value="Higher Education">Higher Education & Universities</option>
                 <option value="Banking">Banking & Financial Services</option>
                 <option value="Healthcare">Healthcare & Diagnostics</option>
                 <option value="FinTech">FinTech & Digital Lending</option>

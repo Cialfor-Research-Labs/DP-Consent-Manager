@@ -432,12 +432,16 @@ def sync_and_normalize_data_principals(cursor):
     except Exception:
         pass
 
-def link_or_create_data_principal(email: str, name: str = None) -> str:
-    conn = get_db()
+def link_or_create_data_principal(email: str, name: str = None, conn=None) -> str:
+    should_close = False
+    if conn is None:
+        conn = get_db()
+        should_close = True
     cursor = conn.cursor()
     parsed_name, norm_email = normalize_email_address(email)
     if not norm_email:
-        conn.close()
+        if should_close:
+            conn.close()
         return 'DP-2026-00000'
 
     final_name = name.strip() if (name and name.strip()) else (parsed_name or "Data Principal")
@@ -456,7 +460,8 @@ def link_or_create_data_principal(email: str, name: str = None) -> str:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """, (dp_id, final_name, norm_email, "+91 98765 43210", f"REF-{dp_id}", "DPDP Citizen Register", "Verified", now_str))
         conn.commit()
-    conn.close()
+    if should_close:
+        conn.close()
     return dp_id
 
 def create_user_account(name: str, email: str, password_hash: str, role: str, data_principal_id: str = None, fiduciary_name: str = None) -> dict:

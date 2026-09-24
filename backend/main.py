@@ -52,6 +52,8 @@ from models import (
     RevokePayload, 
     DSRRequestPayload, 
     ConsentRequestCreatePayload, 
+    BulkRecipient,
+    BulkConsentRequestPayload,
     EmailIngestPayload, 
     GrievancePayload, 
     NomineePayload,
@@ -1289,6 +1291,217 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
     result["link"] = consent_link
 
     return result
+
+
+@app.post("/api/consent-requests/bulk")
+def create_bulk_consent_requests(
+    payload: BulkConsentRequestPayload,
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
+    """
+    Bulk/Batch Consent Request Dispatcher for Institutions, Universities, Colleges & Enterprises.
+    Dispatches cryptographic DPDP consent notices to a list of recipients (e.g. 1000 CS students).
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+
+    recipients = payload.recipients or []
+    if not recipients:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No recipients provided in bulk request.")
+
+    app_base = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+    now_dt = datetime.utcnow()
+    now_iso = now_dt.isoformat() + "Z"
+    expires_iso = (now_dt + timedelta(days=30)).isoformat() + "Z"
+    batch_id = f"BATCH-2026-{int(now_dt.timestamp())}-{random.randint(100, 999)}"
+
+    results = []
+    errors = []
+    success_count = 0
+    fail_count = 0
+
+    default_subject_template = payload.email_subject or f"Statutory DPDP Notice: {payload.purpose}"
+    default_body_template = payload.email_body_template or (
+        f"Dear {{{{name}}}},\n\n"
+        f"{payload.fiduciary_name} requests your digital consent under the DPDP Act 2023 for: {payload.purpose}."
+    )
+
+    for idx, r in enumerate(recipients):
+        try:
+            raw_email = (r.email or "").strip()
+            if not raw_email or "@" not in raw_email:
+                errors.append({"index": idx, "name": r.name, "email": raw_email, "error": "Invalid email address format"})
+                fail_count += 1
+                continue
+
+            parsed_name, norm_email = normalize_email_address(raw_email)
+            dp_name = (r.name or "").strip() or parsed_name or "Data Principal"
+            dp_email = norm_email
+
+            # Create or link data principal using the shared conn
+            dp_id = link_or_create_data_principal(dp_email, dp_name, conn=conn)
+
+            # Update data principal with student roll_no / department if provided
+            if r.roll_no or r.department or r.phone:
+                try:
+                    cursor.execute("""
+                        UPDATE data_principals
+                        SET roll_no = COALESCE(?, roll_no),
+                            institution = COALESCE(?, institution),
+                            phone = COALESCE(?, phone)
+                        WHERE id = ?;
+                    """, (
+                        r.roll_no,
+                        r.department or payload.fiduciary_name,
+                        r.phone,
+                        dp_id
+                    ))
+                except Exception:
+                    pass
+
+            # Personalize subject & body
+            student_subject = (
+                default_subject_template
+                .replace("{{name}}", dp_name)
+                .replace("{{roll_no}}", r.roll_no or "")
+                .replace("{{department}}", r.department or "")
+                .replace("{{fiduciary_name}}", payload.fiduciary_name)
+                .replace("{{purpose}}", payload.purpose)
+            )
+            student_body = (
+                default_body_template
+                .replace("{{name}}", dp_name)
+                .replace("{{roll_no}}", r.roll_no or "")
+                .replace("{{department}}", r.department or "")
+                .replace("{{fiduciary_name}}", payload.fiduciary_name)
+                .replace("{{purpose}}", payload.purpose)
+            )
+
+            snapshot_id = f"ES-2026-{int(now_dt.timestamp())}-{idx}-{random.randint(100, 999)}"
+            cursor.execute("""
+            INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                snapshot_id,
+                f"{payload.fiduciary_name} <{payload.fiduciary_email}>",
+                f"{dp_name} <{dp_email}>",
+                student_subject,
+                now_dt.strftime("%A, %B %d, %Y"),
+                student_body,
+                payload.attachment_name or "Statutory_Privacy_Notice.pdf",
+                "1.2 MB"
+            ))
+
+            req_id = f"REQ-2026-CR-{int(now_dt.timestamp() * 1000)}-{idx}-{random.randint(10, 99)}"
+            token = generate_unpredictable_token()
+            notice_id = f"NTC-2026-CR-{int(now_dt.timestamp() * 1000)}-{idx}-{random.randint(10, 99)}"
+
+            cursor.execute("""
+            INSERT INTO consent_requests (
+                id, token, notice_id, data_principal_id, email_snapshot_id,
+                fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email,
+                dpo_name, dpo_email, purpose, legal_basis, validity_period, data_region,
+                requested_attributes, status, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                req_id,
+                token,
+                notice_id,
+                dp_id,
+                snapshot_id,
+                payload.fiduciary_name,
+                payload.fiduciary_category or "Higher Education / University",
+                payload.fiduciary_logo or "🎓",
+                payload.fiduciary_email,
+                payload.dpo_name or "Data Protection Officer",
+                payload.dpo_email or "dpo@example.com",
+                payload.purpose,
+                payload.legal_basis or "Consent under DPDP Act 2023 (Section 6)",
+                payload.validity_period or "12 Months",
+                payload.data_region or "India",
+                json.dumps(payload.requested_attributes),
+                "PENDING",
+                now_iso,
+                expires_iso
+            ))
+
+            conn.commit()
+
+            consent_link = f"{app_base}/consent/{token}"
+
+            # Dispatch email invite (SMTP/Resend/Dev mode)
+            email_result = send_consent_invite(
+                to_email=dp_email,
+                to_name=dp_name,
+                fiduciary_name=payload.fiduciary_name,
+                consent_link=consent_link,
+                purpose=payload.purpose,
+                attributes=payload.requested_attributes,
+                notice_id=notice_id,
+                expires_at=expires_iso,
+            )
+
+            results.append({
+                "id": req_id,
+                "notice_id": notice_id,
+                "token": token,
+                "data_principal_id": dp_id,
+                "principal_name": dp_name,
+                "principal_email": dp_email,
+                "roll_no": r.roll_no or "",
+                "department": r.department or "",
+                "consent_link": consent_link,
+                "status": "PENDING",
+                "email_sent": email_result.get("success", False),
+                "email_message": email_result.get("message", ""),
+                "email_dev_mode": email_result.get("dev_mode", False),
+            })
+            success_count += 1
+        except Exception as e:
+            logger.exception("Error processing recipient %s in bulk dispatch: %s", getattr(r, 'email', idx), str(e))
+            errors.append({"index": idx, "name": getattr(r, 'name', ''), "email": getattr(r, 'email', ''), "error": str(e)})
+            fail_count += 1
+
+    conn.commit()
+
+    # Log bulk audit event
+    if success_count > 0:
+        try:
+            audit_id = f"AUD-2026-{int(now_dt.timestamp())}-{random.randint(100, 999)}"
+            cursor.execute("""
+            INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                audit_id,
+                batch_id,
+                None,
+                "BULK_RECIPIENTS",
+                "BULK_CONSENT_NOTICE_DISPATCHED",
+                payload.fiduciary_name,
+                f"BATCH-{len(results)}-NOTICES",
+                f"Automated bulk consent notice dispatched to {success_count} recipients for purpose: {payload.purpose}",
+                "127.0.0.1",
+                now_iso,
+                "SUCCESS"
+            ))
+            conn.commit()
+        except Exception as e:
+            logger.warning("Failed to record bulk audit event: %s", str(e))
+
+    conn.close()
+
+    return {
+        "success": True,
+        "batch_id": batch_id,
+        "total": len(recipients),
+        "successful": success_count,
+        "failed": fail_count,
+        "purpose": payload.purpose,
+        "results": results,
+        "errors": errors
+    }
+
 
 # ── PUBLIC: Fetch consent request preview without authentication ───────────────
 @app.get("/api/consent-requests/public/{token}")

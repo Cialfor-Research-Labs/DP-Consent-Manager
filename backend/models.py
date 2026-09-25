@@ -127,3 +127,17 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+class ForgotPasswordPayload(BaseModel):
+    email: str
+
+class VerifyResetOtpPayload(BaseModel):
+    email: str
+    otp: str
+
+class ResetPasswordPayload(BaseModel):
+    email: str
+    otp: Optional[str] = None
+    reset_token: Optional[str] = None
+    new_password: str
+

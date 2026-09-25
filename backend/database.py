@@ -280,6 +280,26 @@ def init_db():
     );
     """)
 
+    # 11. Password Resets Table for Secure Email OTP Verification
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS password_resets (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        otp_code TEXT NOT NULL,
+        reset_token TEXT UNIQUE NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    );
+    """)
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(reset_token);")
+    except Exception:
+        pass
+
     # Auto-add thread_id and message_id columns to existing tables if missing
     for tbl in ["consent_requests", "email_snapshots"]:
         try:
@@ -375,6 +395,65 @@ def get_user_by_id(user_id: str):
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+def create_password_reset(user_id: str, email: str, otp_code: str, reset_token: str, expires_at: str) -> dict:
+    import uuid
+    conn = get_db()
+    cursor = conn.cursor()
+    reset_id = f"RST-{uuid.uuid4().hex[:12].upper()}"
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    cursor.execute("""
+    INSERT INTO password_resets (id, user_id, email, otp_code, reset_token, expires_at, used, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?);
+    """, (reset_id, user_id, email.strip().lower(), otp_code.strip(), reset_token.strip(), expires_at, now_iso))
+    conn.commit()
+    conn.close()
+    return {
+        "id": reset_id,
+        "user_id": user_id,
+        "email": email.strip().lower(),
+        "otp_code": otp_code,
+        "reset_token": reset_token,
+        "expires_at": expires_at
+    }
+
+def get_valid_password_reset(email: str, otp_code: str = None, reset_token: str = None):
+    conn = get_db()
+    cursor = conn.cursor()
+    norm_email = email.strip().lower()
+    if otp_code:
+        cursor.execute("""
+        SELECT * FROM password_resets 
+        WHERE LOWER(email) = ? AND otp_code = ? AND used = 0
+        ORDER BY created_at DESC LIMIT 1;
+        """, (norm_email, otp_code.strip()))
+    elif reset_token:
+        cursor.execute("""
+        SELECT * FROM password_resets 
+        WHERE LOWER(email) = ? AND reset_token = ? AND used = 0
+        ORDER BY created_at DESC LIMIT 1;
+        """, (norm_email, reset_token.strip()))
+    else:
+        conn.close()
+        return None
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def mark_password_reset_used(reset_id: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE password_resets SET used = 1 WHERE id = ?;", (reset_id,))
+    conn.commit()
+    conn.close()
+
+def update_user_password(user_id: str, new_password_hash: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    cursor.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?;", (new_password_hash, now_iso, user_id))
+    conn.commit()
+    conn.close()
 
 def sync_and_normalize_data_principals(cursor):
     """

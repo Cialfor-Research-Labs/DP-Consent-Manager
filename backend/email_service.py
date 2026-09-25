@@ -43,18 +43,28 @@ def _detect_host_base_url() -> str:
 
 
 def _get_resend_config():
-    """Lazily reads email & Resend config from environment (always reflects current .env)."""
-    load_dotenv(dotenv_path=ENV_FILE, override=True)  # guarantees loading root .env dynamically
+    """Lazily reads email & Resend config from environment (always reflects current .env without mutating global os.environ)."""
+    env_file_vars = {}
+    if os.path.exists(ENV_FILE):
+        try:
+            from dotenv import dotenv_values
+            env_file_vars = dotenv_values(ENV_FILE) or {}
+        except Exception:
+            pass
+
+    def get_val(key, default=""):
+        return os.environ.get(key) if key in os.environ else (env_file_vars.get(key) or default)
+
     return {
-        "api_key": os.getenv("RESEND_API_KEY", ""),
-        "from_email": os.getenv("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
-        "from_name": os.getenv("RESEND_FROM_NAME", "DPDP Consent Manager"),
+        "api_key": get_val("RESEND_API_KEY", ""),
+        "from_email": get_val("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
+        "from_name": get_val("RESEND_FROM_NAME", "DPDP Consent Manager"),
         "app_base_url": _detect_host_base_url(),
         # Optional direct SMTP (e.g. Gmail App Password — bypasses domain verification requirement)
-        "smtp_host": os.getenv("SMTP_HOST", "smtp.gmail.com"),
-        "smtp_port": int(os.getenv("SMTP_PORT", "587")),
-        "smtp_user": os.getenv("SMTP_USER") or os.getenv("GMAIL_USER", ""),
-        "smtp_pass": os.getenv("SMTP_PASS") or os.getenv("GMAIL_APP_PASSWORD", ""),
+        "smtp_host": get_val("SMTP_HOST", "smtp.gmail.com"),
+        "smtp_port": int(get_val("SMTP_PORT", "587")),
+        "smtp_user": get_val("SMTP_USER") or get_val("GMAIL_USER", ""),
+        "smtp_pass": get_val("SMTP_PASS") or get_val("GMAIL_APP_PASSWORD", ""),
     }
 
 
@@ -592,4 +602,437 @@ def send_password_reset_email(
         "email_id": None,
         "dev_mode": True,
     }
+
+
+def _build_consent_confirmation_email_html(
+    to_name: str,
+    to_email: str,
+    fiduciary_name: str,
+    fiduciary_category: str,
+    purpose: str,
+    notice_id: str,
+    consent_id: str,
+    granted_attributes: list,
+    denied_attributes: list,
+    granted_on: str,
+    expires_on: str,
+    receipt_hash: str,
+    dpo_email: str = "",
+    data_region: str = "India",
+    dashboard_link: str = "",
+) -> str:
+    """Build a rich, reassuring confirmation email HTML template for recorded consents."""
+
+    granted_fmt = granted_on
+    if granted_on:
+        try:
+            g_dt = datetime.fromisoformat(granted_on.replace("Z", ""))
+            granted_fmt = g_dt.strftime("%d %B %Y, %I:%M %p UTC")
+        except Exception:
+            pass
+
+    expires_fmt = expires_on
+    if expires_on:
+        try:
+            e_dt = datetime.fromisoformat(expires_on.replace("Z", ""))
+            expires_fmt = e_dt.strftime("%d %B %Y")
+        except Exception:
+            pass
+
+    # Build granted attributes rows
+    granted_rows = ""
+    for attr in (granted_attributes or []):
+        if isinstance(attr, dict):
+            name = attr.get("name") or attr.get("id") or "Attribute"
+            category = attr.get("category", "")
+            sensitive = attr.get("sensitive", False)
+        else:
+            name = str(attr)
+            category = ""
+            sensitive = False
+
+        badge = ""
+        if sensitive:
+            badge = '<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;margin-left:6px;">🔒 Sensitive</span>'
+        cat_badge = f'<span style="color:#6b7280;font-size:12px;margin-left:6px;">({category})</span>' if category else ""
+
+        granted_rows += f"""
+        <tr>
+          <td style="padding:10px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;color:#1f2937;">
+            <span style="color:#16a34a;font-weight:bold;margin-right:8px;font-size:16px;">✓</span>
+            <strong>{name}</strong>
+            {cat_badge}
+            {badge}
+          </td>
+          <td style="padding:10px 16px;border-bottom:1px solid #e5e7eb;text-align:right;">
+            <span style="background:#dcfce7;color:#15803d;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Consented</span>
+          </td>
+        </tr>"""
+
+    # Build denied / withheld attributes rows if any
+    denied_section = ""
+    if denied_attributes:
+        denied_rows = ""
+        for attr in denied_attributes:
+            if isinstance(attr, dict):
+                name = attr.get("name") or attr.get("id") or "Attribute"
+            else:
+                name = str(attr)
+            denied_rows += f"""
+            <tr>
+              <td style="padding:10px 16px;border-bottom:1px solid #fee2e2;font-size:14px;color:#6b7280;">
+                <span style="color:#dc2626;font-weight:bold;margin-right:8px;font-size:15px;">✕</span>
+                <span style="text-decoration:line-through;color:#9ca3af;">{name}</span>
+              </td>
+              <td style="padding:10px 16px;border-bottom:1px solid #fee2e2;text-align:right;">
+                <span style="background:#fee2e2;color:#b91c1c;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">Withheld</span>
+              </td>
+            </tr>"""
+
+        denied_section = f"""
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border:1px solid #fecaca;border-radius:8px;overflow:hidden;margin:16px 0 24px;background:#fef2f2;">
+          <thead>
+            <tr style="background:#fee2e2;">
+              <th colspan="2" style="padding:10px 16px;text-align:left;font-size:12px;font-weight:700;color:#991b1b;text-transform:uppercase;letter-spacing:.5px;">
+                ⛔ Attributes Withheld / Excluded from Consent ({len(denied_attributes)})
+              </th>
+            </tr>
+          </thead>
+          <tbody>{denied_rows}</tbody>
+        </table>"""
+
+    dpo_info = f'<p style="margin:4px 0 0;font-size:13px;color:#4b5563;">Data Protection Officer (DPO): <strong>{dpo_email}</strong></p>' if dpo_email else ""
+    cta_url = dashboard_link or "#"
+    year = datetime.utcnow().year
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Consent Confirmation — {fiduciary_name}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;border-radius:12px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1),0 2px 4px -1px rgba(0,0,0,0.06);">
+
+        <!-- Header -->
+        <tr>
+          <td style="background:linear-gradient(135deg,#059669 0%,#0d9488 100%);padding:36px 40px;text-align:center;">
+            <p style="margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:2px;color:rgba(255,255,255,.85);text-transform:uppercase;">
+              Digital Personal Data Protection Act 2023 · Section 6
+            </p>
+            <div style="font-size:36px;margin:0 0 8px;">✅</div>
+            <h1 style="margin:0;font-size:24px;font-weight:800;color:#ffffff;line-height:1.3;">
+              Consent Recorded Successfully
+            </h1>
+            <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,.9);">
+              Consent ID: <code style="background:rgba(255,255,255,.2);padding:3px 8px;border-radius:4px;font-family:monospace;font-weight:bold;">{consent_id}</code>
+            </p>
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="background:#ffffff;padding:40px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
+
+            <p style="font-size:16px;color:#1f2937;margin:0 0 16px;">
+              Dear <strong>{to_name}</strong>,
+            </p>
+
+            <!-- Reassurance Banner (Similar to Job Application Confirmation) -->
+            <div style="background:#ecfdf5;border-left:4px solid #10b981;border-radius:0 8px 8px 0;padding:16px 20px;margin:0 0 24px;">
+              <p style="margin:0 0 4px;font-size:15px;font-weight:700;color:#065f46;">
+                ✓ Your Consent Decision Has Been Safely Recorded
+              </p>
+              <p style="margin:0;font-size:13px;color:#047857;line-height:1.5;">
+                This email confirms that you have granted consent to <strong>{fiduciary_name}</strong>. A cryptographic, tamper-evident record has been registered in your personal Consent Ledger under the DPDP Act 2023.
+              </p>
+            </div>
+
+            <!-- Transaction Details Table -->
+            <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:20px;margin:0 0 24px;">
+              <h3 style="margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#6b7280;font-weight:700;">
+                Transaction &amp; Consent Overview
+              </h3>
+              <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;width:38%;">Data Fiduciary:</td>
+                  <td style="padding:6px 0;color:#111827;font-weight:600;">{fiduciary_name} <span style="font-weight:normal;color:#6b7280;font-size:12px;">({fiduciary_category})</span></td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;">Notice ID:</td>
+                  <td style="padding:6px 0;color:#111827;font-family:monospace;font-size:13px;">{notice_id}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;">Purpose:</td>
+                  <td style="padding:6px 0;color:#111827;">{purpose}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;">Granted On:</td>
+                  <td style="padding:6px 0;color:#111827;">{granted_fmt}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;">Valid Until:</td>
+                  <td style="padding:6px 0;color:#111827;">{expires_fmt}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#6b7280;">Data Storage Region:</td>
+                  <td style="padding:6px 0;color:#111827;">{data_region}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- Attributes Granted Section -->
+            <h3 style="margin:0 0 8px;font-size:14px;color:#1f2937;font-weight:700;">
+              Attributes You Consented to Share ({len(granted_attributes or [])})
+            </h3>
+            <p style="margin:0 0 12px;font-size:13px;color:#6b7280;">
+              You authorized <strong>{fiduciary_name}</strong> to process solely the following specific personal data attributes:
+            </p>
+
+            <table width="100%" cellpadding="0" cellspacing="0"
+                   style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin:0 0 20px;">
+              <thead>
+                <tr style="background:#f9fafb;">
+                  <th style="padding:10px 16px;text-align:left;font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.5px;">
+                    Consented Attribute Name
+                  </th>
+                  <th style="padding:10px 16px;text-align:right;font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.5px;">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody>{granted_rows}</tbody>
+            </table>
+
+            {denied_section}
+
+            <!-- Cryptographic SHA-256 Receipt -->
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:0 0 24px;">
+              <p style="margin:0 0 4px;font-size:12px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;">
+                🛡️ Digital Receipt Signature (SHA-256)
+              </p>
+              <div style="font-family:monospace;font-size:11px;color:#0f172a;word-break:break-all;background:#ffffff;padding:8px 10px;border-radius:6px;border:1px solid #cbd5e1;">
+                {receipt_hash}
+              </div>
+              <p style="margin:6px 0 0;font-size:11px;color:#94a3b8;">
+                This cryptographic signature certifies the integrity and timestamp of your consent decision.
+              </p>
+            </div>
+
+            <!-- DPDP Act Rights Notice -->
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
+              <h4 style="margin:0 0 8px;font-size:13px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:.5px;">
+                ⚖️ Your Rights as Data Principal (DPDP Act 2023)
+              </h4>
+              <ul style="margin:0;padding-left:18px;font-size:13px;color:#1e3a8a;line-height:1.6;">
+                <li><strong>Right to Withdraw Consent:</strong> You have the legal right under Section 6(4) to withdraw or modify this consent at any time from your Consent Dashboard without penalty.</li>
+                <li><strong>Right to Correction &amp; Erasure:</strong> You can request correction of inaccurate data or deletion of processed personal data under Section 12.</li>
+                <li><strong>Right to Grievance Redressal:</strong> In case of questions or concerns, you can contact the fiduciary's Data Protection Officer directly.</li>
+              </ul>
+              {dpo_info}
+            </div>
+
+            <!-- CTA Button to Dashboard -->
+            <table cellpadding="0" cellspacing="0" style="margin:28px 0 20px;">
+              <tr>
+                <td style="background:linear-gradient(135deg,#059669 0%,#0d9488 100%);border-radius:8px;padding:0;">
+                  <a href="{cta_url}"
+                     style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;letter-spacing:.3px;">
+                    View &amp; Manage in Consent Dashboard →
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0 20px;">
+
+            <p style="font-size:12px;color:#9ca3af;margin:0;line-height:1.6;">
+              This is an automated confirmation notice sent to {to_email} pursuant to Section 6 of the Digital Personal Data Protection Act, 2023.
+              Please retain this email as an official record of your consent transaction.
+            </p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#f9fafb;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 12px 12px;padding:20px 40px;text-align:center;">
+            <p style="margin:0;font-size:11px;color:#9ca3af;">
+              DPDP Consent Manager &copy; {year} &middot; Sections 6, 11, 12, 13 &amp; 14 Compliant
+              &middot; Cryptographically Verified Consent Receipt
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+def send_consent_confirmation_email(
+    to_email: str,
+    to_name: str,
+    fiduciary_name: str,
+    fiduciary_category: str = "Corporate Fiduciary",
+    purpose: str = "",
+    notice_id: str = "",
+    consent_id: str = "",
+    granted_attributes: list = None,
+    denied_attributes: list = None,
+    granted_on: str = "",
+    expires_on: str = "",
+    receipt_hash: str = "",
+    dpo_email: str = "",
+    data_region: str = "India",
+    dashboard_link: str = "",
+) -> dict:
+    """
+    Sends an automated Consent Confirmation & Receipt email to the Data Principal
+    whenever they grant consent.
+    
+    Contains the exact list of attributes granted, attributes withheld, purpose,
+    cryptographic receipt hash, and DPDP Act rights.
+    """
+    if not to_email:
+        return {"success": False, "message": "No recipient email provided for consent confirmation.", "dev_mode": False}
+
+    cfg = _get_resend_config()
+    api_key = cfg["api_key"]
+    from_name = cfg["from_name"]
+    from_email = cfg["from_email"]
+
+    subject = f"✓ Consent Confirmed: {fiduciary_name} — DPDP Act 2023 (ID: {consent_id})"
+    html_body = _build_consent_confirmation_email_html(
+        to_name=to_name or "Data Principal",
+        to_email=to_email,
+        fiduciary_name=fiduciary_name,
+        fiduciary_category=fiduciary_category or "Corporate Fiduciary",
+        purpose=purpose or "Data Processing under DPDP Act",
+        notice_id=notice_id or "",
+        consent_id=consent_id or "",
+        granted_attributes=granted_attributes or [],
+        denied_attributes=denied_attributes or [],
+        granted_on=granted_on or datetime.utcnow().isoformat() + "Z",
+        expires_on=expires_on or "",
+        receipt_hash=receipt_hash or "",
+        dpo_email=dpo_email or "",
+        data_region=data_region or "India",
+        dashboard_link=dashboard_link or cfg["app_base_url"],
+    )
+
+    smtp_user = str(cfg.get("smtp_user", "")).strip()
+    smtp_pass = str(cfg.get("smtp_pass", "")).strip().replace(" ", "")
+    smtp_host = cfg.get("smtp_host", "smtp.gmail.com")
+    smtp_port = cfg.get("smtp_port", 587)
+
+    # 1. SMTP Mode (e.g. Gmail App Password)
+    if smtp_user and smtp_pass:
+        try:
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = f"{from_name} <{smtp_user}>"
+            msg["To"] = to_email
+            msg.attach(MIMEText(html_body, "html"))
+
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, [to_email], msg.as_string())
+
+            logger.info("[EMAIL SERVICE] Consent confirmation email sent via SMTP (%s) to %s", smtp_host, to_email)
+            return {
+                "success": True,
+                "message": f"Consent confirmation email sent via SMTP ({smtp_user}) to {to_email}",
+                "email_id": f"smtp-cnst-{int(datetime.utcnow().timestamp())}",
+                "dev_mode": False,
+            }
+        except Exception as e:
+            logger.error("[EMAIL SERVICE] SMTP consent confirmation send failed: %s", str(e))
+            return {
+                "success": False,
+                "message": f"SMTP send failed: {str(e)}",
+                "email_id": None,
+                "dev_mode": False,
+            }
+
+    # 2. Resend API mode
+    if api_key and not api_key.startswith("re_YOUR") and api_key != "":
+        try:
+            payload = {
+                "from": f"{from_name} <{from_email}>",
+                "to": [to_email],
+                "subject": subject,
+                "html": html_body,
+                "tags": [
+                    {"name": "type", "value": "consent-confirmation"},
+                    {"name": "consent_id", "value": consent_id or "unknown"},
+                    {"name": "notice_id", "value": notice_id or "unknown"},
+                ],
+            }
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "DPDP-Consent-Manager/1.0 Python/3",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                response_data = json.loads(resp.read().decode("utf-8"))
+                email_id = response_data.get("id")
+                logger.info("[EMAIL SERVICE] Consent confirmation sent via Resend. ID=%s To=%s", email_id, to_email)
+                return {
+                    "success": True,
+                    "message": f"Consent confirmation email sent via Resend to {to_email}",
+                    "email_id": email_id,
+                    "dev_mode": False,
+                }
+        except Exception as e:
+            logger.error("[EMAIL SERVICE] Resend consent confirmation send failed: %s", str(e))
+            return {
+                "success": False,
+                "message": f"Email send failed: {str(e)}",
+                "email_id": None,
+                "dev_mode": False,
+            }
+
+    # 3. Dev Mode (Console fallback)
+    attr_names = [a.get("name") if isinstance(a, dict) else str(a) for a in (granted_attributes or [])]
+    logger.warning(
+        "[EMAIL SERVICE] Dev mode: Consent confirmation printed to console.\n"
+        "  To: %s <%s>\n  Consent ID: %s\n  Fiduciary: %s\n  Attributes: %s",
+        to_name, to_email, consent_id, fiduciary_name, ", ".join(attr_names)
+    )
+    print("\n" + "=" * 72)
+    print("[CONSENT CONFIRMATION EMAIL - DEV MODE] (would be sent via SMTP/Resend)")
+    print("=" * 72)
+    print(f"  To:         {to_name} <{to_email}>")
+    print(f"  Fiduciary:  {fiduciary_name} ({fiduciary_category})")
+    print(f"  Consent ID: {consent_id}")
+    print(f"  Notice ID:  {notice_id}")
+    print(f"  Purpose:    {purpose}")
+    print(f"  Granted:    {', '.join(attr_names) or 'None'}")
+    if denied_attributes:
+        print(f"  Denied:     {', '.join([a.get('name') if isinstance(a, dict) else str(a) for a in denied_attributes])}")
+    print(f"  Receipt:    {receipt_hash}")
+    print("=" * 72 + "\n")
+    return {
+        "success": True,
+        "message": f"Dev mode: Consent confirmation email logged for {to_email}",
+        "email_id": None,
+        "dev_mode": True,
+    }
+
 

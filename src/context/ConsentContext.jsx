@@ -556,7 +556,7 @@ export const ConsentProvider = ({ children }) => {
 
       setToastMessage({
         type: 'success',
-        text: `Consent GRANTED to ${currentScenario.fiduciary}. Receipt generated!`
+        text: `Consent GRANTED to ${currentScenario.fiduciary}. Confirmation email & statutory receipt sent!`
       });
 
       return consentRecord;

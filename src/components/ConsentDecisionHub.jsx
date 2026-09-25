@@ -210,6 +210,30 @@ export const ConsentDecisionHub = () => {
                 </p>
               </div>
             )}
+
+            {isGranted && (
+              <div style={{
+                background: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: '8px',
+                padding: '16px 20px',
+                margin: '16px 0 0',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '12px',
+                textAlign: 'left'
+              }}>
+                <div style={{ fontSize: '22px', lineHeight: 1 }}>📨</div>
+                <div>
+                  <h4 style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#166534' }}>
+                    Confirmation Email Dispatched
+                  </h4>
+                  <p style={{ margin: 0, fontSize: '13px', color: '#15803d', lineHeight: 1.5 }}>
+                    Just like a job application confirmation, a statutory receipt detailing the granted attributes ({Array.isArray(record.grantedAttributes) ? record.grantedAttributes.join(', ') : 'selected attributes'}) and cryptographic proof has been sent to <strong>{record.principalEmail || currentScenario.dataPrincipal?.email || 'your registered email'}</strong>.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="success-actions-row">

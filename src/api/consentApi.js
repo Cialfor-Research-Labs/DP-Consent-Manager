@@ -85,6 +85,57 @@ export const consentApi = {
     return await response.json();
   },
 
+  /**
+   * Request password recovery OTP code via email/Gmail
+   * POST /api/auth/forgot-password
+   */
+  async forgotPassword(email) {
+    const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to initiate password reset.');
+    }
+    return data;
+  },
+
+  /**
+   * Verify password reset OTP code
+   * POST /api/auth/verify-reset-otp
+   */
+  async verifyResetOtp(email, otp) {
+    const response = await fetch(`${API_BASE_URL}/auth/verify-reset-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Verification code is invalid or has expired.');
+    }
+    return data;
+  },
+
+  /**
+   * Submit new password with OTP or reset token
+   * POST /api/auth/reset-password
+   */
+  async resetPassword(payload) {
+    const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to reset password.');
+    }
+    return data;
+  },
+
   // ── CONSENT & INTEGRATION ENDPOINTS ───────────────────────────────────
 
   /**

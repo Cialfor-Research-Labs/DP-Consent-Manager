@@ -360,3 +360,236 @@ def send_consent_invite(
             "email_id": None,
             "dev_mode": False,
         }
+
+
+def _build_password_reset_email_html(
+    to_name: str,
+    to_email: str,
+    otp_code: str,
+    reset_link: str,
+    expires_in_minutes: int = 15,
+) -> str:
+    """Build a rich security-styled HTML email template for password reset."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Password Reset - DPDP Consent Manager</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 10px 25px -5px rgba(0,0,0,0.08),0 8px 10px -6px rgba(0,0,0,0.03);max-width:600px;width:100%;">
+          
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);padding:28px 32px;text-align:center;">
+              <div style="font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">
+                DPDP Consent Manager
+              </div>
+              <div style="font-size:12px;color:#94a3b8;margin-top:4px;letter-spacing:0.5px;text-transform:uppercase;">
+                Data Privacy &amp; Consent Management Platform
+              </div>
+            </td>
+          </tr>
+
+          <!-- Security Banner -->
+          <tr>
+            <td style="background:#f0fdf4;border-bottom:1px solid #bbf7d0;padding:12px 32px;text-align:center;">
+              <span style="font-size:12px;font-weight:700;color:#15803d;letter-spacing:0.5px;">
+                SECURITY NOTIFICATION - PASSWORD RESET REQUEST
+              </span>
+            </td>
+          </tr>
+
+          <!-- Main Body -->
+          <tr>
+            <td style="padding:32px;">
+              <h2 style="font-size:20px;font-weight:700;color:#0f172a;margin:0 0 16px 0;">
+                Password Reset Verification
+              </h2>
+              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 20px 0;">
+                Hello <strong>{to_name or 'User'}</strong>,
+              </p>
+              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 24px 0;">
+                We received a request to reset the password for your account associated with <strong style="color:#0f172a;">{to_email}</strong>. Use the 6-digit verification code below to verify your identity and set a new password:
+              </p>
+
+              <!-- OTP Code Display Card -->
+              <div style="background:#f8fafc;border:2px dashed #0284c7;border-radius:12px;padding:24px;text-align:center;margin:24px 0;">
+                <div style="font-size:11px;font-weight:700;color:#0284c7;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">
+                  Your Verification OTP Code
+                </div>
+                <div style="font-size:36px;font-weight:800;letter-spacing:10px;color:#0f172a;font-family:'Courier New',Courier,monospace;">
+                  {otp_code}
+                </div>
+                <div style="font-size:12px;color:#64748b;margin-top:8px;">
+                  This code expires in <strong>{expires_in_minutes} minutes</strong>.
+                </div>
+              </div>
+
+              <!-- Direct Link Action Button -->
+              <div style="text-align:center;margin:28px 0 24px 0;">
+                <a href="{reset_link}" style="display:inline-block;background:#0284c7;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;box-shadow:0 4px 6px -1px rgba(2,132,199,0.25);">
+                  Reset Password in Portal &rarr;
+                </a>
+              </div>
+
+              <p style="font-size:13px;line-height:1.5;color:#64748b;margin:0 0 16px 0;background:#f8fafc;padding:12px 16px;border-radius:8px;border-left:4px solid #94a3b8;">
+                <strong>Security Tip:</strong> Never share this OTP code or reset link with anyone. Our support team will never ask for your password or verification codes.
+              </p>
+
+              <p style="font-size:12px;line-height:1.5;color:#94a3b8;margin:0;">
+                If you did not make this request, you can safely ignore this email. Your existing password will remain active and secure.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 32px;text-align:center;">
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 4px 0;">
+                This automated security notification was dispatched in accordance with DPDP Act 2023.
+              </p>
+              <p style="font-size:11px;color:#cbd5e1;margin:0;">
+                DPDP Consent Manager Security Operations
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def send_password_reset_email(
+    to_email: str,
+    to_name: str,
+    otp_code: str,
+    reset_link: str,
+    expires_in_minutes: int = 15,
+) -> dict:
+    """
+    Sends an automated Password Reset OTP email to the user.
+    Uses SMTP (e.g. Gmail) if configured, otherwise falls back to Resend API or dev console.
+    """
+    cfg = _get_resend_config()
+    api_key = cfg["api_key"]
+    from_name = cfg["from_name"]
+    from_email = cfg["from_email"]
+
+    subject = f"[Security] Password Reset Verification Code: {otp_code} — DPDP Consent Manager"
+    html_body = _build_password_reset_email_html(
+        to_name=to_name or "User",
+        to_email=to_email,
+        otp_code=otp_code,
+        reset_link=reset_link,
+        expires_in_minutes=expires_in_minutes,
+    )
+
+    smtp_user = str(cfg.get("smtp_user", "")).strip()
+    smtp_pass = str(cfg.get("smtp_pass", "")).strip().replace(" ", "")
+    smtp_host = cfg.get("smtp_host", "smtp.gmail.com")
+    smtp_port = cfg.get("smtp_port", 587)
+
+    # 1. SMTP Mode (Gmail)
+    if smtp_user and smtp_pass:
+        try:
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = f"{from_name} <{smtp_user}>"
+            msg["To"] = to_email
+            msg.attach(MIMEText(html_body, "html"))
+
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, [to_email], msg.as_string())
+
+            logger.info("[EMAIL SERVICE] Password reset OTP sent via SMTP (%s). To=%s", smtp_host, to_email)
+            return {
+                "success": True,
+                "message": f"Password reset email sent to {to_email}",
+                "email_id": f"smtp-pwd-{int(datetime.utcnow().timestamp())}",
+                "dev_mode": False,
+            }
+        except Exception as e:
+            logger.error("[EMAIL SERVICE] SMTP password reset send failed: %s", str(e))
+            # If SMTP fails, don't silently swallow; report failure or fallback
+            return {
+                "success": False,
+                "message": f"SMTP send failed: {str(e)}",
+                "email_id": None,
+                "dev_mode": False,
+            }
+
+    # 2. Resend API mode
+    if api_key and not api_key.startswith("re_YOUR") and api_key != "":
+        try:
+            payload = {
+                "from": f"{from_name} <{from_email}>",
+                "to": [to_email],
+                "subject": subject,
+                "html": html_body,
+                "tags": [
+                    {"name": "type", "value": "password-reset"},
+                ],
+            }
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "DPDP-Consent-Manager/1.0 Python/3",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                response_data = json.loads(resp.read().decode("utf-8"))
+                email_id = response_data.get("id")
+                return {
+                    "success": True,
+                    "message": f"Password reset email sent via Resend to {to_email}",
+                    "email_id": email_id,
+                    "dev_mode": False,
+                }
+        except Exception as e:
+            logger.error("[EMAIL SERVICE] Resend password reset send failed: %s", str(e))
+            return {
+                "success": False,
+                "message": f"Email send failed: {str(e)}",
+                "email_id": None,
+                "dev_mode": False,
+            }
+
+    # 3. Dev Mode (Console fallback)
+    logger.warning(
+        "[EMAIL SERVICE] Dev mode: Password reset code printed to console.\n"
+        "  To: %s <%s>\n  OTP: %s\n  Link: %s",
+        to_name, to_email, otp_code, reset_link,
+    )
+    print("\n" + "=" * 72)
+    print("[PASSWORD RESET - OTP VERIFICATION CODE] (DEV / LOCAL FALLBACK)")
+    print("=" * 72)
+    print(f"  To:       {to_name} <{to_email}>")
+    print(f"  OTP Code: {otp_code}")
+    print(f"  Link:     {reset_link}")
+    print("=" * 72 + "\n")
+    return {
+        "success": True,
+        "message": f"Dev mode: Password reset code {otp_code} generated for {to_email}",
+        "email_id": None,
+        "dev_mode": True,
+    }
+

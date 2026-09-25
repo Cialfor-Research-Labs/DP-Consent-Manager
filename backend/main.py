@@ -4,10 +4,12 @@ import re
 import json
 import hmac
 import random
+import secrets
 import logging
 import mimetypes
 import threading
 import urllib.request
+import urllib.parse
 import uvicorn
 from typing import Optional
 from datetime import datetime, timedelta
@@ -67,7 +69,11 @@ from database import (
     get_user_by_id,
     create_user_account,
     link_or_create_data_principal,
-    normalize_email_address
+    normalize_email_address,
+    create_password_reset,
+    get_valid_password_reset,
+    mark_password_reset_used,
+    update_user_password
 )
 from auth import (
     hash_password,
@@ -78,7 +84,7 @@ from auth import (
     get_optional_user,
     require_role
 )
-from email_service import send_consent_invite
+from email_service import send_consent_invite, send_password_reset_email
 from models import (
     DecisionPayload, 
     RevokePayload, 
@@ -93,7 +99,10 @@ from models import (
     AdminUserProvisionPayload,
     UserLoginPayload,
     AuthResponse,
-    UserOut
+    UserOut,
+    ForgotPasswordPayload,
+    VerifyResetOtpPayload,
+    ResetPasswordPayload
 )
 
 # Initialize database tables and seed records
@@ -904,6 +913,154 @@ def get_current_user_profile(current_user: dict = Depends(get_current_user)):
             "created_at": current_user.get("created_at")
         }
     }
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordPayload, request: Request):
+    """
+    Initiates password recovery by sending a 6-digit OTP code to the user's Gmail/email.
+    Also provides a secure direct link to open the reset form.
+    """
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email address is required.")
+
+    normalized_email = payload.email.strip().lower()
+    if not re.match(EMAIL_REGEX, normalized_email):
+        raise HTTPException(status_code=422, detail="Invalid email address format.")
+
+    user = get_user_by_email(normalized_email)
+    
+    # Security: If user exists, generate OTP and dispatch email.
+    # Uniform response is returned to prevent email enumeration attacks.
+    if user:
+        # Generate 6-digit cryptographically random OTP
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
+        reset_token = f"tok_rst_{secrets.token_hex(24)}"
+        expires_at = (datetime.utcnow() + timedelta(minutes=15)).isoformat() + "Z"
+
+        create_password_reset(
+            user_id=user["id"],
+            email=normalized_email,
+            otp_code=otp_code,
+            reset_token=reset_token,
+            expires_at=expires_at
+        )
+
+        base_url = get_hosted_base_url(request)
+        reset_link = f"{base_url}/?action=reset_password&email={urllib.parse.quote(normalized_email)}&token={reset_token}&otp={otp_code}"
+
+        # Send automated email via Gmail SMTP / Resend
+        email_result = send_password_reset_email(
+            to_email=normalized_email,
+            to_name=user.get("name", "User"),
+            otp_code=otp_code,
+            reset_link=reset_link,
+            expires_in_minutes=15
+        )
+
+        logger.info("[AUTH] Password reset OTP generated for %s (Status: %s)", normalized_email, email_result.get("success"))
+
+    return {
+        "success": True,
+        "message": f"If an account is associated with {normalized_email}, a 6-digit verification code has been dispatched to your email address.",
+        "email": normalized_email
+    }
+
+
+@app.post("/api/auth/verify-reset-otp")
+def verify_reset_otp(payload: VerifyResetOtpPayload):
+    """
+    Verifies that the submitted OTP code is valid and has not expired.
+    """
+    if not payload.email or not payload.otp:
+        raise HTTPException(status_code=400, detail="Email and OTP code are required.")
+
+    normalized_email = payload.email.strip().lower()
+    reset_record = get_valid_password_reset(email=normalized_email, otp_code=payload.otp.strip())
+
+    if not reset_record:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired verification code. Please check the code or request a new one."
+        )
+
+    # Check expiration
+    expires_str = reset_record["expires_at"].rstrip("Z")
+    try:
+        expires_dt = datetime.fromisoformat(expires_str)
+        if expires_dt < datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail="Verification code has expired. Please request a new password reset."
+            )
+    except ValueError:
+        pass
+
+    return {
+        "valid": True,
+        "reset_token": reset_record["reset_token"],
+        "message": "OTP verification successful."
+    }
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(payload: ResetPasswordPayload):
+    """
+    Resets the user's password following verification of the OTP code or reset token.
+    Enforces DPDP security password strength requirements.
+    """
+    if not payload.email or not payload.new_password:
+        raise HTTPException(status_code=400, detail="Email and new password are required.")
+
+    if not payload.otp and not payload.reset_token:
+        raise HTTPException(status_code=400, detail="Either OTP code or reset token is required.")
+
+    normalized_email = payload.email.strip().lower()
+    user = get_user_by_email(normalized_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="No registered account found for this email address.")
+
+    reset_record = get_valid_password_reset(
+        email=normalized_email,
+        otp_code=payload.otp.strip() if payload.otp else None,
+        reset_token=payload.reset_token.strip() if payload.reset_token else None
+    )
+
+    if not reset_record:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset credentials. Please request a new password reset."
+        )
+
+    # Check expiration
+    expires_str = reset_record["expires_at"].rstrip("Z")
+    try:
+        expires_dt = datetime.fromisoformat(expires_str)
+        if expires_dt < datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail="Password reset session has expired. Please request a new verification code."
+            )
+    except ValueError:
+        pass
+
+    # Enforce password strength
+    valid_pwd, pwd_error = validate_password_strength(payload.new_password)
+    if not valid_pwd:
+        raise HTTPException(status_code=422, detail=pwd_error)
+
+    # Hash new password with bcrypt
+    new_hash = hash_password(payload.new_password)
+    update_user_password(user["id"], new_hash)
+    mark_password_reset_used(reset_record["id"])
+
+    logger.info("[AUTH] Password successfully reset for user %s (%s)", user["id"], normalized_email)
+
+    return {
+        "success": True,
+        "message": "Your password has been reset successfully. You can now log in with your new password."
+    }
+
 
 
 @app.post("/api/admin/users/provision", response_model=AuthResponse)
@@ -3066,4 +3223,5 @@ if __name__ == "__main__":
     print("DP Consent Manager Single-Port React + FastAPI Server")
     print("Serving UI & REST API Base: http://localhost:8000")
     print("====================================================")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, app_dir=backend_dir)

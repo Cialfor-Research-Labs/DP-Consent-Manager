@@ -17,10 +17,12 @@ from test_helper import create_isolated_test_db, destroy_isolated_test_db, asser
 from fastapi.testclient import TestClient
 
 try:
+    import backend.main as main_module
     from backend.main import app
     from backend.auth import hash_password, verify_password
     from backend.database import get_db, create_user_account, get_user_by_email, get_valid_password_reset
 except ImportError:
+    import main as main_module
     from main import app
     from auth import hash_password, verify_password
     from database import get_db, create_user_account, get_user_by_email, get_valid_password_reset
@@ -57,7 +59,7 @@ class TestForgotPasswordFlow(unittest.TestCase):
     def tearDownClass(cls):
         destroy_isolated_test_db(cls.test_db_path)
 
-    @patch("main.send_password_reset_email")
+    @patch.object(main_module, "send_password_reset_email")
     def test_01_forgot_password_initiates_otp_and_email(self, mock_send_email):
         mock_send_email.return_value = {"success": True, "message": "Email sent"}
 
@@ -90,7 +92,7 @@ class TestForgotPasswordFlow(unittest.TestCase):
 
     def test_03_verify_reset_otp_success_and_failure(self):
         # Request a new OTP
-        with patch("main.send_password_reset_email") as mock_send:
+        with patch.object(main_module, "send_password_reset_email") as mock_send:
             mock_send.return_value = {"success": True}
             self.client.post("/api/auth/forgot-password", json={"email": self.test_email})
             otp_code = mock_send.call_args[1]["otp_code"]
@@ -113,7 +115,7 @@ class TestForgotPasswordFlow(unittest.TestCase):
         self.assertTrue(data.get("reset_token").startswith("tok_rst_"))
 
     def test_04_reset_password_strength_enforcement(self):
-        with patch("main.send_password_reset_email") as mock_send:
+        with patch.object(main_module, "send_password_reset_email") as mock_send:
             mock_send.return_value = {"success": True}
             self.client.post("/api/auth/forgot-password", json={"email": self.test_email})
             otp_code = mock_send.call_args[1]["otp_code"]
@@ -127,7 +129,7 @@ class TestForgotPasswordFlow(unittest.TestCase):
         self.assertEqual(weak_resp.status_code, 422)
 
     def test_05_reset_password_success_and_login_verification(self):
-        with patch("main.send_password_reset_email") as mock_send:
+        with patch.object(main_module, "send_password_reset_email") as mock_send:
             mock_send.return_value = {"success": True}
             self.client.post("/api/auth/forgot-password", json={"email": self.test_email})
             otp_code = mock_send.call_args[1]["otp_code"]

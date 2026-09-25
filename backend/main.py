@@ -84,7 +84,7 @@ from auth import (
     get_optional_user,
     require_role
 )
-from email_service import send_consent_invite, send_password_reset_email
+from email_service import send_consent_invite, send_password_reset_email, send_consent_confirmation_email
 from models import (
     DecisionPayload, 
     RevokePayload, 
@@ -2135,6 +2135,7 @@ def get_consent_request_by_token_path(
 def record_consent_decision(
     request_id: str, 
     payload: DecisionPayload, 
+    request: Request = None,
     current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
 ):
     if payload.decision not in ["GRANTED", "DENIED"]:
@@ -2353,6 +2354,16 @@ def record_consent_decision(
             principal_name = current_user.get("name") or "Data Principal"
 
         principal_email = dp_dict.get("email") or current_user.get("email") or ""
+        if not principal_email:
+            cursor.execute("SELECT email FROM users WHERE data_principal_id = ? LIMIT 1;", (req["data_principal_id"],))
+            u_row2 = cursor.fetchone()
+            if u_row2 and u_row2["email"]:
+                principal_email = u_row2["email"]
+        if not principal_email and req.get("email_snapshot_id"):
+            cursor.execute("SELECT to_address FROM email_snapshots WHERE id = ? LIMIT 1;", (req["email_snapshot_id"],))
+            es_row2 = cursor.fetchone()
+            if es_row2 and es_row2["to_address"]:
+                principal_email = es_row2["to_address"]
 
         consent_record = {
             "consentId": consent_id,
@@ -2376,6 +2387,57 @@ def record_consent_decision(
             "receiptHash": receipt_hash,
             "customNote": payload.remark
         }
+
+        # ── DISPATCH CONFIRMATION EMAIL TO DATA PRINCIPAL ─────────────
+        confirmation_email_res = None
+        if principal_email:
+            app_base = get_hosted_base_url(request)
+            dashboard_link = f"{app_base}/?tab=consents"
+            try:
+                confirmation_email_res = send_consent_confirmation_email(
+                    to_email=principal_email,
+                    to_name=principal_name,
+                    fiduciary_name=req["fiduciary_name"],
+                    fiduciary_category=req.get("fiduciary_category") or "Corporate Fiduciary",
+                    purpose=req["purpose"],
+                    notice_id=req["notice_id"],
+                    consent_id=consent_id,
+                    granted_attributes=readable_granted,
+                    denied_attributes=readable_denied,
+                    granted_on=now,
+                    expires_on=expiry,
+                    receipt_hash=receipt_hash,
+                    dpo_email=req.get("dpo_email") or "",
+                    data_region=req.get("data_region") or "India",
+                    dashboard_link=dashboard_link,
+                )
+                logger.info(
+                    "[CONSENT] Confirmation email sent to %s for consent %s (Success: %s)",
+                    principal_email, consent_id, confirmation_email_res.get("success")
+                )
+            except Exception as e:
+                logger.error("[CONSENT] Failed to send confirmation email to %s: %s", principal_email, str(e))
+                confirmation_email_res = {"success": False, "message": str(e), "dev_mode": False}
+
+            if confirmation_email_res:
+                cursor.execute("""
+                INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (
+                    f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}",
+                    req["id"],
+                    consent_id,
+                    req["data_principal_id"],
+                    "CONFIRMATION_EMAIL_SENT",
+                    req["fiduciary_name"],
+                    req["notice_id"],
+                    f"Confirmation receipt email dispatched to {principal_email}. Attributes granted: {len(readable_granted)}.",
+                    "103.21.124.88",
+                    now,
+                    "SUCCESS" if confirmation_email_res.get("success") else "FAILED"
+                ))
+    else:
+        confirmation_email_res = None
 
     audit_id = f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}"
     audit_action = "CONSENT_GRANTED" if payload.decision == "GRANTED" else "CONSENT_DENIED"
@@ -2473,7 +2535,8 @@ def record_consent_decision(
     return {
         "success": True,
         "message": f"Consent decision {payload.decision} recorded successfully.",
-        "consent": consent_record
+        "consent": consent_record,
+        "confirmation_email": confirmation_email_res if payload.decision == "GRANTED" else None
     }
 
 

@@ -82,6 +82,13 @@ export const ConsentReceiptModal = () => {
             <span className="receipt-val">{new Date(latestReceipt.expiresOn).toLocaleDateString()} (1 Year)</span>
           </div>
 
+          {latestReceipt.principalEmail && (
+            <div className="receipt-row" style={{ background: 'rgba(16, 185, 129, 0.08)', borderRadius: '6px', padding: '6px 10px', marginTop: '6px' }}>
+              <span className="receipt-key" style={{ color: 'var(--success)', fontWeight: 600 }}>Confirmation Email:</span>
+              <span className="receipt-val" style={{ color: 'var(--success)' }}>Dispatched to {latestReceipt.principalEmail}</span>
+            </div>
+          )}
+
           <div className="receipt-hash-box">
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
               SHA-256 INTEGRITY HASH:

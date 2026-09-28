@@ -310,8 +310,15 @@ export const ConsentProvider = ({ children }) => {
   // Periodic background polling: refresh consent requests every 60 seconds
   // (reduced from 5s — Resend direct invite flow removes the need for frequent polling)
   useEffect(() => {
-    if (!authUserId) return;
+    // Only poll personal requests for Data Principals; skip for Fiduciaries / Admins
+    if (!authUserId || authUser?.role !== 'DATA_PRINCIPAL') return;
+
     const pollInterval = setInterval(() => {
+      // Avoid background polling when browser tab is inactive / minimized
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
+
       consentApi.fetchMyConsentRequests().then(myReqs => {
         if (myReqs && Array.isArray(myReqs)) {
           setMyConsentRequests(myReqs);
@@ -337,10 +344,10 @@ export const ConsentProvider = ({ children }) => {
       }).catch(() => {
         // Silent catch for background poll to avoid intrusive error banners
       });
-    }, 5000); // 5000ms responsive polling interval for incoming consent notices
+    }, 15000); // 15s responsive polling interval for incoming consent notices
 
     return () => clearInterval(pollInterval);
-  }, [authUserId]);
+  }, [authUserId, authUser?.role]);
 
 
   // Popstate navigation listener: synchronizes browser back/forward buttons with tab & scenario state

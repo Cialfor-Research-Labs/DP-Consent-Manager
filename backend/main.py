@@ -1,5 +1,12 @@
 import socket
 import os
+import sys
+
+# Ensure backend directory is in sys.path
+_backend_dir = os.path.dirname(os.path.abspath(__file__))
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
 import re
 import json
 import hmac
@@ -3072,18 +3079,22 @@ def submit_grievance(
     }
 
 @app.get("/api/nominee")
-def get_nominee(current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))):
+def get_nominee(
+    principalId: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    current_user: dict = Depends(require_role(["DATA_PRINCIPAL", "DATA_FIDUCIARY", "ADMIN"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
-    dp_id = current_user.get("dp_id")
-    email = current_user.get("email")
+    dp_id = principalId or current_user.get("dp_id")
+    user_email = email or current_user.get("email")
 
     cursor.execute("""
     SELECT * FROM statutory_nominees 
     WHERE (data_principal_id = ? OR principal_email = ?) AND status = 'ACTIVE_VERIFIED'
     ORDER BY date_designated DESC LIMIT 1;
-    """, (dp_id, email))
+    """, (dp_id, user_email))
     row = cursor.fetchone()
     conn.close()
 

@@ -399,10 +399,10 @@ export const ConsentDecisionHub = () => {
                             </span>
                           )}
                           {attr.required && (
-                            <span className="badge-mandatory">Mandatory</span>
+                            <span className="badge badge-mandatory">Mandatory</span>
                           )}
                           {attr.sensitive && (
-                            <span className="badge-sensitive">Sensitive</span>
+                            <span className="badge badge-sensitive">Sensitive</span>
                           )}
                         </div>
                       </div>

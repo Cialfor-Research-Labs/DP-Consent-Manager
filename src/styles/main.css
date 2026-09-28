@@ -131,6 +131,10 @@ body {
   overflow-x: hidden;
 }
 
+button, input, select, textarea {
+  font-family: var(--font-main);
+}
+
 /* App Container */
 .app-container {
   display: flex;
@@ -882,13 +886,18 @@ body {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.72rem;
+  justify-content: center;
+  gap: 4.5px;
+  font-family: var(--font-main);
+  font-size: 0.70rem;
   font-weight: 700;
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  line-height: 1.3;
-  letter-spacing: 0.2px;
+  letter-spacing: 0.025em;
+  padding: 2.5px 8.5px;
+  border-radius: var(--radius-sm);
+  line-height: 1.25;
+  white-space: nowrap;
+  vertical-align: middle;
+  transition: all 0.15s ease;
 }
 
 .badge-verified {
@@ -916,15 +925,53 @@ body {
 }
 
 .badge-mandatory {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-family: var(--font-main);
+  font-size: 0.70rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  padding: 2.5px 8.5px;
+  border-radius: var(--radius-sm);
+  line-height: 1.25;
+  white-space: nowrap;
+  vertical-align: middle;
   background: var(--warning-bg);
   color: var(--warning);
   border: 1px solid var(--warning-border);
 }
 
 .badge-sensitive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-family: var(--font-main);
+  font-size: 0.70rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  padding: 2.5px 8.5px;
+  border-radius: var(--radius-sm);
+  line-height: 1.25;
+  white-space: nowrap;
+  vertical-align: middle;
   background: var(--danger-bg);
   color: var(--danger);
   border: 1px solid var(--danger-border);
+}
+
+[data-theme="dark"] .badge-mandatory {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+[data-theme="dark"] .badge-sensitive {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 /* Sector Badges */
@@ -1841,24 +1888,38 @@ body {
 }
 
 .section-title-sm {
-  font-size: 1.02rem;
+  font-family: var(--font-main);
+  font-size: 1.05rem;
   font-weight: 800;
   color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 8px;
+  letter-spacing: -0.015em;
 }
 
 .section-subtitle-sm {
-  font-size: 0.8rem;
+  font-family: var(--font-main);
+  font-size: 0.82rem;
   color: var(--text-secondary);
   margin-top: 2px;
+  line-height: 1.45;
 }
 
 .select-all-controls {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.select-all-controls .btn-sm {
+  font-family: var(--font-main);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.01em;
 }
 
 /* Attribute Cards Grid */
@@ -1906,32 +1967,43 @@ body {
 }
 
 .attribute-name {
-  font-size: 0.9rem;
+  font-family: var(--font-main);
+  font-size: 0.92rem;
   font-weight: 700;
   color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 
 .attribute-tags-row {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
 .attr-cat-badge {
-  font-size: 0.68rem;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-main);
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2.5px 7.5px;
+  border-radius: var(--radius-sm);
   background: var(--bg-card-subtle);
   color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-color);
+  line-height: 1.25;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .attribute-desc {
-  font-size: 0.8rem;
+  font-family: var(--font-main);
+  font-size: 0.82rem;
   color: var(--text-secondary);
   margin-top: 6px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 /* Toggle Switch */

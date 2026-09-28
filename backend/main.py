@@ -186,6 +186,8 @@ def hydrate_request(req_row, conn):
         dp_dict["kycStatus"] = dp_dict.get("kyc_status", "Verified")
         dp_dict["registeredOn"] = dp_dict.get("registered_on", "")
     req["dataPrincipal"] = dp_dict
+    req["rollNo"] = dp_dict.get("roll_no", "")
+    req["roll_no"] = dp_dict.get("roll_no", "")
 
     # Hydrate EmailSnapshot
     cursor.execute("SELECT * FROM email_snapshots WHERE id = ?;", (req["email_snapshot_id"],))
@@ -1410,6 +1412,14 @@ def create_consent_request(
     dp_name = payload.principal_name or parsed_name or "Data Principal"
     dp_email = norm_email
     dp_id = link_or_create_data_principal(dp_email, dp_name)
+
+    roll_no = (payload.roll_no or payload.principal_roll_no or "").strip()
+    if roll_no:
+        try:
+            cursor.execute("UPDATE data_principals SET roll_no = ? WHERE id = ?;", (roll_no, dp_id))
+            conn.commit()
+        except Exception:
+            pass
 
     snapshot_id = f"ES-2026-{random.randint(1000, 9999)}"
     cursor.execute("""
@@ -2644,12 +2654,20 @@ def list_consents(current_user: dict = Depends(get_current_user)):
         else:
             cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
     rows = cursor.fetchall()
+    cursor.execute("SELECT id, name, email, roll_no FROM data_principals;")
+    dp_map = {row["id"]: dict(row) for row in cursor.fetchall()}
     conn.close()
 
     results = []
     for r in rows:
         d = dict(r)
         d["consentId"] = d.get("consent_id")
+        dp_info = dp_map.get(d.get("data_principal_id"), {})
+        d["dataPrincipal"] = dp_info
+        d["principalName"] = dp_info.get("name") or "Data Principal"
+        d["principalEmail"] = dp_info.get("email") or ""
+        d["rollNo"] = dp_info.get("roll_no", "")
+        d["roll_no"] = dp_info.get("roll_no", "")
         # Safe JSON parse for granted_attributes
         if isinstance(d.get("granted_attributes"), str):
             try:

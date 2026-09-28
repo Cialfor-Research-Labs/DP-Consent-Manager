@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { useConsent } from '../context/ConsentContext';
-import { Mail, Sparkles, Copy, ExternalLink, X, CheckCircle2 } from 'lucide-react';
+import { Mail, Sparkles, Copy, X, CheckCircle2 } from 'lucide-react';
 import { consentApi } from '../api/consentApi';
 
 export const NoticeGeneratorModal = ({ isOpen, onClose }) => {
-  const { refetchBackendData, switchScenario, setToastMessage } = useConsent();
+  const { setToastMessage, openRequestReview } = useConsent();
 
   const [toAddress, setToAddress] = useState("pandeyprerna1407@gmail.com");
-  const [fromAddress, setFromAddress] = useState("Prerna Pandey <prerna.p@cialfor.com>");
+  const [fromAddress] = useState("Prerna Pandey <prerna.p@cialfor.com>");
   const [fiduciaryName, setFiduciaryName] = useState("Cialfor Research Labs Private Limited");
   const [subject, setSubject] = useState("Action Required: Consent for PF Account Processing");
   const [bodyText, setBodyText] = useState(`Dear Employee,
@@ -50,12 +50,37 @@ Cialfor Research Labs Private Limited`);
       });
 
       const token = res && res.token ? res.token : `tok_${Date.now()}`;
-      const redirectUrl = `/request/${token}?to=${encodeURIComponent(toAddress)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}&fiduciary=${encodeURIComponent(fiduciaryName)}`;
-      window.location.href = redirectUrl;
+      const fullLink = `${window.location.origin}/request/${token}`;
+      setGeneratedLink(fullLink);
+      if (setToastMessage) {
+        setToastMessage({
+          type: 'success',
+          text: 'Notice ingested successfully! Opening request review...'
+        });
+      }
+      setTimeout(() => {
+        onClose();
+        if (openRequestReview) {
+          openRequestReview(token);
+        } else {
+          window.location.href = `/request/${token}`;
+        }
+      }, 1000);
     } catch (e) {
       console.error("Ingest error:", e);
-      const redirectUrl = `/request/tok_${Date.now()}?to=${encodeURIComponent(toAddress)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}&fiduciary=${encodeURIComponent(fiduciaryName)}`;
-      window.location.href = redirectUrl;
+      const token = `tok_${Date.now()}`;
+      const fullLink = `${window.location.origin}/request/${token}`;
+      setGeneratedLink(fullLink);
+      if (setToastMessage) {
+        setToastMessage({
+          type: 'info',
+          text: 'Notice created. Opening request review...'
+        });
+      }
+      setTimeout(() => {
+        onClose();
+        window.location.href = `/request/${token}`;
+      }, 1000);
     } finally {
       setLoading(false);
     }

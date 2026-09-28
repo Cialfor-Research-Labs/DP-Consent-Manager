@@ -38,6 +38,8 @@ class ConsentRequestCreatePayload(BaseModel):
     email_subject: str
     email_body: str
     attachment_name: Optional[str] = "Statutory_Privacy_Notice.pdf"
+    roll_no: Optional[str] = None
+    principal_roll_no: Optional[str] = None
 
 class BulkRecipient(BaseModel):
     name: Optional[str] = "Data Principal"

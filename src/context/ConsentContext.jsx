@@ -301,8 +301,15 @@ export const ConsentProvider = ({ children }) => {
 
   // Periodic background polling: ensures newly arrived Gmail requests automatically appear on dashboard
   useEffect(() => {
-    if (!authUserId) return;
+    // Only poll personal requests for Data Principals; skip for Fiduciaries / Admins
+    if (!authUserId || authUser?.role !== 'DATA_PRINCIPAL') return;
+
     const pollInterval = setInterval(() => {
+      // Avoid background polling when browser tab is inactive / minimized
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
+
       consentApi.fetchMyConsentRequests().then(myReqs => {
         if (myReqs && Array.isArray(myReqs)) {
           setMyConsentRequests(myReqs);
@@ -328,10 +335,10 @@ export const ConsentProvider = ({ children }) => {
       }).catch(() => {
         // Silent catch for background poll to avoid intrusive error banners
       });
-    }, 5000);
+    }, 15000);
 
     return () => clearInterval(pollInterval);
-  }, [authUserId]);
+  }, [authUserId, authUser?.role]);
 
   // Popstate navigation listener: synchronizes browser back/forward buttons with tab & scenario state
   useEffect(() => {

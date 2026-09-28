@@ -85,6 +85,57 @@ export const consentApi = {
     return await response.json();
   },
 
+  /**
+   * Request password recovery OTP code via email/Gmail
+   * POST /api/auth/forgot-password
+   */
+  async forgotPassword(email) {
+    const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to initiate password reset.');
+    }
+    return data;
+  },
+
+  /**
+   * Verify password reset OTP code
+   * POST /api/auth/verify-reset-otp
+   */
+  async verifyResetOtp(email, otp) {
+    const response = await fetch(`${API_BASE_URL}/auth/verify-reset-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Verification code is invalid or has expired.');
+    }
+    return data;
+  },
+
+  /**
+   * Submit new password with OTP or reset token
+   * POST /api/auth/reset-password
+   */
+  async resetPassword(payload) {
+    const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to reset password.');
+    }
+    return data;
+  },
+
   // ── CONSENT & INTEGRATION ENDPOINTS ───────────────────────────────────
 
   /**
@@ -208,9 +259,38 @@ export const consentApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const data = await response.json();
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { detail: text || `Server error (${response.status})` };
+    }
     if (!response.ok) {
-      throw new Error(data.detail || 'Failed to create consent request notice.');
+      throw new Error(data.detail || data.message || 'Failed to create consent request notice.');
+    }
+    return data;
+  },
+
+  /**
+   * Create bulk consent requests in batch (Data Fiduciary / Admin only)
+   * POST /api/consent-requests/bulk
+   */
+  async createBulkConsentRequests(payload) {
+    const response = await authFetch(`${API_BASE_URL}/consent-requests/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { detail: text || `Server error (${response.status})` };
+    }
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || 'Failed to dispatch bulk consent notices.');
     }
     return data;
   },
@@ -437,5 +517,42 @@ export const consentApi = {
       console.warn('Backend API nominee remove offline:', e.message);
     }
     return { success: true };
+  },
+
+  /**
+   * Fetch public (unauthenticated) consent request preview by token.
+   * Used on the consent landing page shown before login.
+   * GET /api/consent-requests/public/{token}
+   */
+  async getPublicConsentRequest(token) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/consent-requests/public/${encodeURIComponent(token)}`);
+      if (response.ok) {
+        return await response.json();
+      }
+      if (response.status === 404) {
+        return null;
+      }
+    } catch (e) {
+      console.warn('Public consent request fetch error:', e.message);
+    }
+    return null;
+  },
+
+  /**
+   * (Re)send the Resend consent invite email for an existing request.
+   * POST /api/consent-requests/send-email/{requestId}
+   */
+  async resendConsentEmail(requestId) {
+    const response = await authFetch(`${API_BASE_URL}/consent-requests/send-email/${encodeURIComponent(requestId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to resend consent email.');
+    }
+    return data;
   }
 };
+

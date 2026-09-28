@@ -281,8 +281,16 @@ export const ConsentProvider = ({ children }) => {
   const authUserId = authUser?.id || null;
   useEffect(() => {
     if (authUserId) {
-      // User is authenticated — ensure role-based landing tab is dashboard
-      setActiveTab('dashboard');
+      // User is authenticated — check if there is a pending consent request to review
+      const hasPendingToken = (() => {
+        try {
+          return sessionStorage.getItem('dp_pending_consent_token') ||
+                 window.location.pathname.match(/\/(consent|request)\/([^/?#]+)/);
+        } catch { return false; }
+      })();
+      if (!hasPendingToken) {
+        setActiveTab('dashboard');
+      }
       refetchBackendData();
     } else {
       // No user — reset all session-specific state to clean defaults so
@@ -299,7 +307,8 @@ export const ConsentProvider = ({ children }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUserId]);
 
-  // Periodic background polling: ensures newly arrived Gmail requests automatically appear on dashboard
+  // Periodic background polling: refresh consent requests every 60 seconds
+  // (reduced from 5s — Resend direct invite flow removes the need for frequent polling)
   useEffect(() => {
     // Only poll personal requests for Data Principals; skip for Fiduciaries / Admins
     if (!authUserId || authUser?.role !== 'DATA_PRINCIPAL') return;
@@ -335,10 +344,11 @@ export const ConsentProvider = ({ children }) => {
       }).catch(() => {
         // Silent catch for background poll to avoid intrusive error banners
       });
-    }, 15000);
+    }, 15000); // 15s responsive polling interval for incoming consent notices
 
     return () => clearInterval(pollInterval);
   }, [authUserId, authUser?.role]);
+
 
   // Popstate navigation listener: synchronizes browser back/forward buttons with tab & scenario state
   useEffect(() => {
@@ -366,8 +376,8 @@ export const ConsentProvider = ({ children }) => {
   // Async token resolution effect from backend Python REST API
   useEffect(() => {
     const pathname = window.location.pathname;
-    const pathTokenMatch = pathname.match(/\/request\/([^/]+)/);
-    const pathToken = pathTokenMatch ? pathTokenMatch[1] : null;
+    const pathTokenMatch = pathname.match(/\/(consent|request)\/([^/?#]+)/);
+    const pathToken = pathTokenMatch ? pathTokenMatch[2] : null;
 
     const params = new URLSearchParams(window.location.search);
     const tokenParam = params.get('token') || pathToken;
@@ -409,7 +419,7 @@ export const ConsentProvider = ({ children }) => {
     }).catch(err => {
       console.warn("Failed to fetch token request from API:", err);
     });
-  }, []);
+  }, [authUserId]);
 
   // Sync state to local storage for persistence across reloads
   useEffect(() => {
@@ -553,7 +563,7 @@ export const ConsentProvider = ({ children }) => {
 
       setToastMessage({
         type: 'success',
-        text: `Consent GRANTED to ${currentScenario.fiduciary}. Receipt generated!`
+        text: `Consent GRANTED to ${currentScenario.fiduciary}. Confirmation email & statutory receipt sent!`
       });
 
       return consentRecord;

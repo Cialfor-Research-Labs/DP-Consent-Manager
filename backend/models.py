@@ -38,6 +38,33 @@ class ConsentRequestCreatePayload(BaseModel):
     email_subject: str
     email_body: str
     attachment_name: Optional[str] = "Statutory_Privacy_Notice.pdf"
+    roll_no: Optional[str] = None
+    principal_roll_no: Optional[str] = None
+
+class BulkRecipient(BaseModel):
+    name: Optional[str] = "Data Principal"
+    email: str
+    phone: Optional[str] = None
+    roll_no: Optional[str] = None
+    department: Optional[str] = None
+
+class BulkConsentRequestPayload(BaseModel):
+    fiduciary_name: str
+    fiduciary_category: Optional[str] = "Educational Institution / Corporate Fiduciary"
+    fiduciary_logo: Optional[str] = "🏫"
+    fiduciary_email: str
+    dpo_name: Optional[str] = "Data Protection Officer"
+    dpo_email: Optional[str] = "dpo@example.com"
+    recipients: List[BulkRecipient]
+    purpose: str
+    domain: Optional[str] = "Higher Education & Universities"
+    legal_basis: Optional[str] = "Consent under DPDP Act 2023 (Section 6)"
+    validity_period: Optional[str] = "12 Months"
+    data_region: Optional[str] = "India"
+    requested_attributes: List[Dict[str, Any]]
+    email_subject: Optional[str] = None
+    email_body_template: Optional[str] = None
+    attachment_name: Optional[str] = "Statutory_Privacy_Notice.pdf"
 
 class EmailIngestPayload(BaseModel):
     from_address: Optional[str] = "Prerna Pandey <prerna.p@cialfor.com>"
@@ -102,3 +129,17 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+class ForgotPasswordPayload(BaseModel):
+    email: str
+
+class VerifyResetOtpPayload(BaseModel):
+    email: str
+    otp: str
+
+class ResetPasswordPayload(BaseModel):
+    email: str
+    otp: Optional[str] = None
+    reset_token: Optional[str] = None
+    new_password: str
+

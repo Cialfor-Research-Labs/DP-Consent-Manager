@@ -1,3 +1,4 @@
+import socket
 import os
 import sys
 
@@ -10,10 +11,12 @@ import re
 import json
 import hmac
 import random
+import secrets
 import logging
 import mimetypes
 import threading
 import urllib.request
+import urllib.parse
 import uvicorn
 from typing import Optional
 from datetime import datetime, timedelta
@@ -25,6 +28,37 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 
 logger = logging.getLogger(__name__)
+
+
+def get_hosted_base_url(request: Optional[Request] = None) -> str:
+    """
+    Resolves the reachable base URL for the hosted application.
+    Prioritizes explicit non-localhost APP_BASE_URL from environment,
+    or falls back to detecting the host machine's LAN IP address so links
+    in emails work on devices connected to the same Wi-Fi/network.
+    """
+    env_base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
+    if env_base and not ("localhost" in env_base or "127.0.0.1" in env_base):
+        return env_base
+
+    if request:
+        host_header = request.headers.get("host")
+        if host_header and not (host_header.startswith("localhost") or host_header.startswith("127.0.0.1")):
+            proto = request.headers.get("x-forwarded-proto", "http")
+            return f"{proto}://{host_header}".rstrip("/")
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        host_ip = s.getsockname()[0]
+        s.close()
+        if host_ip and host_ip != "127.0.0.1":
+            port = os.getenv("PORT", "8000")
+            return f"http://{host_ip}:{port}"
+    except Exception:
+        pass
+
+    return env_base or f"http://localhost:{os.getenv('PORT', '8000')}"
 
 from consent_intent_detector import (
     detect_consent_intent,
@@ -42,7 +76,11 @@ from database import (
     get_user_by_id,
     create_user_account,
     link_or_create_data_principal,
-    normalize_email_address
+    normalize_email_address,
+    create_password_reset,
+    get_valid_password_reset,
+    mark_password_reset_used,
+    update_user_password
 )
 from auth import (
     hash_password,
@@ -53,11 +91,14 @@ from auth import (
     get_optional_user,
     require_role
 )
+from email_service import send_consent_invite, send_password_reset_email, send_consent_confirmation_email
 from models import (
     DecisionPayload, 
     RevokePayload, 
     DSRRequestPayload, 
     ConsentRequestCreatePayload, 
+    BulkRecipient,
+    BulkConsentRequestPayload,
     EmailIngestPayload, 
     GrievancePayload, 
     NomineePayload,
@@ -65,7 +106,10 @@ from models import (
     AdminUserProvisionPayload,
     UserLoginPayload,
     AuthResponse,
-    UserOut
+    UserOut,
+    ForgotPasswordPayload,
+    VerifyResetOtpPayload,
+    ResetPasswordPayload
 )
 
 # Initialize database tables and seed records
@@ -95,7 +139,7 @@ if env_origins:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:[0-9]+)?",
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:[0-9]+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -149,6 +193,8 @@ def hydrate_request(req_row, conn):
         dp_dict["kycStatus"] = dp_dict.get("kyc_status", "Verified")
         dp_dict["registeredOn"] = dp_dict.get("registered_on", "")
     req["dataPrincipal"] = dp_dict
+    req["rollNo"] = dp_dict.get("roll_no", "")
+    req["roll_no"] = dp_dict.get("roll_no", "")
 
     # Hydrate EmailSnapshot
     cursor.execute("SELECT * FROM email_snapshots WHERE id = ?;", (req["email_snapshot_id"],))
@@ -878,6 +924,154 @@ def get_current_user_profile(current_user: dict = Depends(get_current_user)):
     }
 
 
+@app.post("/api/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordPayload, request: Request):
+    """
+    Initiates password recovery by sending a 6-digit OTP code to the user's Gmail/email.
+    Also provides a secure direct link to open the reset form.
+    """
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email address is required.")
+
+    normalized_email = payload.email.strip().lower()
+    if not re.match(EMAIL_REGEX, normalized_email):
+        raise HTTPException(status_code=422, detail="Invalid email address format.")
+
+    user = get_user_by_email(normalized_email)
+    
+    # Security: If user exists, generate OTP and dispatch email.
+    # Uniform response is returned to prevent email enumeration attacks.
+    if user:
+        # Generate 6-digit cryptographically random OTP
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
+        reset_token = f"tok_rst_{secrets.token_hex(24)}"
+        expires_at = (datetime.utcnow() + timedelta(minutes=15)).isoformat() + "Z"
+
+        create_password_reset(
+            user_id=user["id"],
+            email=normalized_email,
+            otp_code=otp_code,
+            reset_token=reset_token,
+            expires_at=expires_at
+        )
+
+        base_url = get_hosted_base_url(request)
+        reset_link = f"{base_url}/?action=reset_password&email={urllib.parse.quote(normalized_email)}&token={reset_token}&otp={otp_code}"
+
+        # Send automated email via Gmail SMTP / Resend
+        email_result = send_password_reset_email(
+            to_email=normalized_email,
+            to_name=user.get("name", "User"),
+            otp_code=otp_code,
+            reset_link=reset_link,
+            expires_in_minutes=15
+        )
+
+        logger.info("[AUTH] Password reset OTP generated for %s (Status: %s)", normalized_email, email_result.get("success"))
+
+    return {
+        "success": True,
+        "message": f"If an account is associated with {normalized_email}, a 6-digit verification code has been dispatched to your email address.",
+        "email": normalized_email
+    }
+
+
+@app.post("/api/auth/verify-reset-otp")
+def verify_reset_otp(payload: VerifyResetOtpPayload):
+    """
+    Verifies that the submitted OTP code is valid and has not expired.
+    """
+    if not payload.email or not payload.otp:
+        raise HTTPException(status_code=400, detail="Email and OTP code are required.")
+
+    normalized_email = payload.email.strip().lower()
+    reset_record = get_valid_password_reset(email=normalized_email, otp_code=payload.otp.strip())
+
+    if not reset_record:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired verification code. Please check the code or request a new one."
+        )
+
+    # Check expiration
+    expires_str = reset_record["expires_at"].rstrip("Z")
+    try:
+        expires_dt = datetime.fromisoformat(expires_str)
+        if expires_dt < datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail="Verification code has expired. Please request a new password reset."
+            )
+    except ValueError:
+        pass
+
+    return {
+        "valid": True,
+        "reset_token": reset_record["reset_token"],
+        "message": "OTP verification successful."
+    }
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(payload: ResetPasswordPayload):
+    """
+    Resets the user's password following verification of the OTP code or reset token.
+    Enforces DPDP security password strength requirements.
+    """
+    if not payload.email or not payload.new_password:
+        raise HTTPException(status_code=400, detail="Email and new password are required.")
+
+    if not payload.otp and not payload.reset_token:
+        raise HTTPException(status_code=400, detail="Either OTP code or reset token is required.")
+
+    normalized_email = payload.email.strip().lower()
+    user = get_user_by_email(normalized_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="No registered account found for this email address.")
+
+    reset_record = get_valid_password_reset(
+        email=normalized_email,
+        otp_code=payload.otp.strip() if payload.otp else None,
+        reset_token=payload.reset_token.strip() if payload.reset_token else None
+    )
+
+    if not reset_record:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset credentials. Please request a new password reset."
+        )
+
+    # Check expiration
+    expires_str = reset_record["expires_at"].rstrip("Z")
+    try:
+        expires_dt = datetime.fromisoformat(expires_str)
+        if expires_dt < datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail="Password reset session has expired. Please request a new verification code."
+            )
+    except ValueError:
+        pass
+
+    # Enforce password strength
+    valid_pwd, pwd_error = validate_password_strength(payload.new_password)
+    if not valid_pwd:
+        raise HTTPException(status_code=422, detail=pwd_error)
+
+    # Hash new password with bcrypt
+    new_hash = hash_password(payload.new_password)
+    update_user_password(user["id"], new_hash)
+    mark_password_reset_used(reset_record["id"])
+
+    logger.info("[AUTH] Password successfully reset for user %s (%s)", user["id"], normalized_email)
+
+    return {
+        "success": True,
+        "message": "Your password has been reset successfully. You can now log in with your new password."
+    }
+
+
+
 @app.post("/api/admin/users/provision", response_model=AuthResponse)
 def provision_fiduciary_user(
     payload: AdminUserProvisionPayload,
@@ -1037,6 +1231,10 @@ def sync_gmail_webhook(
     payload: EmailIngestPayload,
     _authorized: bool = Depends(verify_webhook_secret)
 ):
+    # NOTE: Gmail AppScript integration is deprecated. This endpoint is kept
+    # for backward-compatibility but the primary flow now uses Resend email
+    # invites sent directly from /api/consent-requests. The endpoint still
+    # processes any incoming Gmail webhook calls if they arrive.
     # 1. Defense-in-depth guard: Ignore system-generated receipts/replies/notifications
     is_sys, sys_reason = is_system_generated_email(
         from_address=payload.from_address,
@@ -1200,6 +1398,8 @@ def ingest_email_without_debug_metadata(
     payload: EmailIngestPayload,
     _authorized: bool = Depends(verify_webhook_secret)
 ):
+    # NOTE: Deprecated — Gmail AppScript sync is replaced by Resend email invites.
+    # Kept for backward-compatibility only.
     result = strip_admin_fields(sync_gmail_webhook(payload, _authorized))
     if result.get("ignored") and result.get("reason", "").startswith("intent_"):
         return {"ignored": True, "reason": "not_a_consent_request"}
@@ -1207,7 +1407,11 @@ def ingest_email_without_debug_metadata(
 
 
 @app.post("/api/consent-requests")
-def create_consent_request(payload: ConsentRequestCreatePayload, current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))):
+def create_consent_request(
+    payload: ConsentRequestCreatePayload,
+    request: Request = None,
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1215,6 +1419,14 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
     dp_name = payload.principal_name or parsed_name or "Data Principal"
     dp_email = norm_email
     dp_id = link_or_create_data_principal(dp_email, dp_name)
+
+    roll_no = (payload.roll_no or payload.principal_roll_no or "").strip()
+    if roll_no:
+        try:
+            cursor.execute("UPDATE data_principals SET roll_no = ? WHERE id = ?;", (roll_no, dp_id))
+            conn.commit()
+        except Exception:
+            pass
 
     snapshot_id = f"ES-2026-{random.randint(1000, 9999)}"
     cursor.execute("""
@@ -1268,7 +1480,360 @@ def create_consent_request(payload: ConsentRequestCreatePayload, current_user: d
     row = cursor.fetchone()
     result = strip_admin_fields(hydrate_request(row, conn))
     conn.close()
+
+    # ── Send consent invite email with hosted laptop IP & port link ───────────
+    app_base = get_hosted_base_url(request)
+    consent_link = f"{app_base}/consent/{token}"
+    email_result = send_consent_invite(
+        to_email=dp_email,
+        to_name=dp_name,
+        fiduciary_name=payload.fiduciary_name,
+        consent_link=consent_link,
+        purpose=payload.purpose,
+        attributes=payload.requested_attributes,
+        notice_id=notice_id,
+        expires_at=expires,
+    )
+    result["email_sent"] = email_result.get("success", False)
+    result["email_message"] = email_result.get("message", "")
+    result["email_dev_mode"] = email_result.get("dev_mode", False)
+    result["consent_link"] = consent_link
+    result["link"] = consent_link
+
     return result
+
+
+@app.post("/api/consent-requests/bulk")
+def create_bulk_consent_requests(
+    payload: BulkConsentRequestPayload,
+    request: Request = None,
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
+    """
+    Bulk/Batch Consent Request Dispatcher for Institutions, Universities, Colleges & Enterprises.
+    Dispatches cryptographic DPDP consent notices to a list of recipients (e.g. 1000 CS students).
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+
+    recipients = payload.recipients or []
+    if not recipients:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No recipients provided in bulk request.")
+
+    app_base = get_hosted_base_url(request)
+    now_dt = datetime.utcnow()
+    now_iso = now_dt.isoformat() + "Z"
+    expires_iso = (now_dt + timedelta(days=30)).isoformat() + "Z"
+    batch_id = f"BATCH-2026-{int(now_dt.timestamp())}-{random.randint(100, 999)}"
+
+    results = []
+    errors = []
+    success_count = 0
+    fail_count = 0
+
+    default_subject_template = payload.email_subject or f"Statutory DPDP Notice: {payload.purpose}"
+    default_body_template = payload.email_body_template or (
+        f"Dear {{{{name}}}},\n\n"
+        f"{payload.fiduciary_name} requests your digital consent under the DPDP Act 2023 for: {payload.purpose}."
+    )
+
+    for idx, r in enumerate(recipients):
+        try:
+            raw_email = (r.email or "").strip()
+            if not raw_email or "@" not in raw_email:
+                errors.append({"index": idx, "name": r.name, "email": raw_email, "error": "Invalid email address format"})
+                fail_count += 1
+                continue
+
+            parsed_name, norm_email = normalize_email_address(raw_email)
+            dp_name = (r.name or "").strip() or parsed_name or "Data Principal"
+            dp_email = norm_email
+
+            # Create or link data principal using the shared conn
+            dp_id = link_or_create_data_principal(dp_email, dp_name, conn=conn)
+
+            # Update data principal with student roll_no / department if provided
+            if r.roll_no or r.department or r.phone:
+                try:
+                    cursor.execute("""
+                        UPDATE data_principals
+                        SET roll_no = COALESCE(?, roll_no),
+                            institution = COALESCE(?, institution),
+                            phone = COALESCE(?, phone)
+                        WHERE id = ?;
+                    """, (
+                        r.roll_no,
+                        r.department or payload.fiduciary_name,
+                        r.phone,
+                        dp_id
+                    ))
+                except Exception:
+                    pass
+
+            # Personalize subject & body
+            student_subject = (
+                default_subject_template
+                .replace("{{name}}", dp_name)
+                .replace("{{roll_no}}", r.roll_no or "")
+                .replace("{{department}}", r.department or "")
+                .replace("{{fiduciary_name}}", payload.fiduciary_name)
+                .replace("{{purpose}}", payload.purpose)
+            )
+            student_body = (
+                default_body_template
+                .replace("{{name}}", dp_name)
+                .replace("{{roll_no}}", r.roll_no or "")
+                .replace("{{department}}", r.department or "")
+                .replace("{{fiduciary_name}}", payload.fiduciary_name)
+                .replace("{{purpose}}", payload.purpose)
+            )
+
+            snapshot_id = f"ES-2026-{int(now_dt.timestamp())}-{idx}-{random.randint(100, 999)}"
+            cursor.execute("""
+            INSERT INTO email_snapshots (id, from_address, to_address, subject, sent_date, body_text, attachment_name, attachment_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                snapshot_id,
+                f"{payload.fiduciary_name} <{payload.fiduciary_email}>",
+                f"{dp_name} <{dp_email}>",
+                student_subject,
+                now_dt.strftime("%A, %B %d, %Y"),
+                student_body,
+                payload.attachment_name or "Statutory_Privacy_Notice.pdf",
+                "1.2 MB"
+            ))
+
+            req_id = f"REQ-2026-CR-{int(now_dt.timestamp() * 1000)}-{idx}-{random.randint(10, 99)}"
+            token = generate_unpredictable_token()
+            notice_id = f"NTC-2026-CR-{int(now_dt.timestamp() * 1000)}-{idx}-{random.randint(10, 99)}"
+
+            cursor.execute("""
+            INSERT INTO consent_requests (
+                id, token, notice_id, data_principal_id, email_snapshot_id,
+                fiduciary_name, fiduciary_category, fiduciary_logo, fiduciary_email,
+                dpo_name, dpo_email, purpose, legal_basis, validity_period, data_region,
+                requested_attributes, status, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                req_id,
+                token,
+                notice_id,
+                dp_id,
+                snapshot_id,
+                payload.fiduciary_name,
+                payload.fiduciary_category or "Higher Education / University",
+                payload.fiduciary_logo or "🎓",
+                payload.fiduciary_email,
+                payload.dpo_name or "Data Protection Officer",
+                payload.dpo_email or "dpo@example.com",
+                payload.purpose,
+                payload.legal_basis or "Consent under DPDP Act 2023 (Section 6)",
+                payload.validity_period or "12 Months",
+                payload.data_region or "India",
+                json.dumps(payload.requested_attributes),
+                "PENDING",
+                now_iso,
+                expires_iso
+            ))
+
+            conn.commit()
+
+            consent_link = f"{app_base}/consent/{token}"
+
+            # Dispatch email invite (SMTP/Resend/Dev mode)
+            email_result = send_consent_invite(
+                to_email=dp_email,
+                to_name=dp_name,
+                fiduciary_name=payload.fiduciary_name,
+                consent_link=consent_link,
+                purpose=payload.purpose,
+                attributes=payload.requested_attributes,
+                notice_id=notice_id,
+                expires_at=expires_iso,
+            )
+
+            results.append({
+                "id": req_id,
+                "notice_id": notice_id,
+                "token": token,
+                "data_principal_id": dp_id,
+                "principal_name": dp_name,
+                "principal_email": dp_email,
+                "roll_no": r.roll_no or "",
+                "department": r.department or "",
+                "consent_link": consent_link,
+                "status": "PENDING",
+                "email_sent": email_result.get("success", False),
+                "email_message": email_result.get("message", ""),
+                "email_dev_mode": email_result.get("dev_mode", False),
+            })
+            success_count += 1
+        except Exception as e:
+            logger.exception("Error processing recipient %s in bulk dispatch: %s", getattr(r, 'email', idx), str(e))
+            errors.append({"index": idx, "name": getattr(r, 'name', ''), "email": getattr(r, 'email', ''), "error": str(e)})
+            fail_count += 1
+
+    conn.commit()
+
+    # Log bulk audit event
+    if success_count > 0:
+        try:
+            audit_id = f"AUD-2026-{int(now_dt.timestamp())}-{random.randint(100, 999)}"
+            cursor.execute("""
+            INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                audit_id,
+                batch_id,
+                None,
+                "BULK_RECIPIENTS",
+                "BULK_CONSENT_NOTICE_DISPATCHED",
+                payload.fiduciary_name,
+                f"BATCH-{len(results)}-NOTICES",
+                f"Automated bulk consent notice dispatched to {success_count} recipients for purpose: {payload.purpose}",
+                "127.0.0.1",
+                now_iso,
+                "SUCCESS"
+            ))
+            conn.commit()
+        except Exception as e:
+            logger.warning("Failed to record bulk audit event: %s", str(e))
+
+    conn.close()
+
+    return {
+        "success": True,
+        "batch_id": batch_id,
+        "total": len(recipients),
+        "successful": success_count,
+        "failed": fail_count,
+        "purpose": payload.purpose,
+        "results": results,
+        "errors": errors
+    }
+
+
+# ── PUBLIC: Fetch consent request preview without authentication ───────────────
+@app.get("/api/consent-requests/public/{token}")
+def get_public_consent_request_preview(token: str = Path(..., description="Consent invite token")):
+    """
+    Public (unauthenticated) endpoint that returns a minimal preview of the
+    consent request for the login page shown when recipient clicks the link.
+    Returns safe public fields and recipient identity hint for frictionless login/registration.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM consent_requests WHERE token = ? OR notice_id = ? OR id = ?;", (token, token, token))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Consent request not found or link is invalid.")
+
+    req = dict(row)
+    try:
+        attributes = json.loads(req.get("requested_attributes") or "[]")
+    except Exception:
+        attributes = []
+
+    # Look up data principal name and email to support seamless login/registration
+    dp_name = ""
+    dp_email = ""
+    if req.get("data_principal_id"):
+        cursor.execute("SELECT name, email FROM data_principals WHERE id = ?;", (req["data_principal_id"],))
+        dp_row = cursor.fetchone()
+        if dp_row:
+            dp_name = dp_row["name"] or ""
+            dp_email = dp_row["email"] or ""
+
+    conn.close()
+    return {
+        "notice_id": req.get("notice_id", ""),
+        "fiduciary_name": req.get("fiduciary_name", ""),
+        "fiduciary_category": req.get("fiduciary_category", ""),
+        "fiduciary_logo": req.get("fiduciary_logo", "🏢"),
+        "purpose": req.get("purpose", ""),
+        "domain": req.get("domain", ""),
+        "legal_basis": req.get("legal_basis", ""),
+        "validity_period": req.get("validity_period", ""),
+        "data_region": req.get("data_region", ""),
+        "status": req.get("status", ""),
+        "expires_at": req.get("expires_at", ""),
+        "principal_name": dp_name,
+        "principal_email": dp_email,
+        "attributes": [
+            {
+                "name": a.get("name", ""),
+                "category": a.get("category", ""),
+                "sensitive": a.get("sensitive", False),
+                "required": a.get("required", False),
+            }
+            for a in attributes
+        ],
+        "token": token,
+    }
+
+
+# ── Resend consent invite email for an existing request ────────────────────────
+@app.post("/api/consent-requests/send-email/{request_id}")
+def resend_consent_email(
+    request_id: str = Path(..., description="Consent request ID or token"),
+    request: Request = None,
+    current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
+):
+    """
+    (Re)send the Resend consent invite email for an existing consent request.
+    Only accessible by authenticated Data Fiduciaries or Admins.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM consent_requests WHERE id = ? OR token = ?;", (request_id, request_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Consent request not found.")
+
+    req = dict(row)
+    # Fetch data principal email
+    cursor.execute("SELECT * FROM data_principals WHERE id = ?;", (req["data_principal_id"],))
+    dp_row = cursor.fetchone()
+    dp = dict(dp_row) if dp_row else {}
+    dp_email = dp.get("email", "")
+    dp_name = dp.get("name", "Data Principal")
+
+    try:
+        attributes = json.loads(req.get("requested_attributes") or "[]")
+    except Exception:
+        attributes = []
+
+    conn.close()
+
+    if not dp_email:
+        raise HTTPException(status_code=400, detail="No email address on record for this data principal.")
+
+    app_base = get_hosted_base_url(request)
+    consent_link = f"{app_base}/consent/{req['token']}"
+
+    email_result = send_consent_invite(
+        to_email=dp_email,
+        to_name=dp_name,
+        fiduciary_name=req.get("fiduciary_name", ""),
+        consent_link=consent_link,
+        purpose=req.get("purpose", ""),
+        attributes=attributes,
+        notice_id=req.get("notice_id", ""),
+        expires_at=req.get("expires_at", ""),
+    )
+
+    return {
+        "success": email_result.get("success", False),
+        "message": email_result.get("message", ""),
+        "email_id": email_result.get("email_id"),
+        "dev_mode": email_result.get("dev_mode", False),
+        "consent_link": consent_link,
+        "to_email": dp_email,
+    }
+
 
 @app.get("/api/consent-requests/resolve")
 def resolve_consent_request(
@@ -1587,6 +2152,7 @@ def get_consent_request_by_token_path(
 def record_consent_decision(
     request_id: str, 
     payload: DecisionPayload, 
+    request: Request = None,
     current_user: dict = Depends(require_role(["DATA_PRINCIPAL"]))
 ):
     if payload.decision not in ["GRANTED", "DENIED"]:
@@ -1805,6 +2371,16 @@ def record_consent_decision(
             principal_name = current_user.get("name") or "Data Principal"
 
         principal_email = dp_dict.get("email") or current_user.get("email") or ""
+        if not principal_email:
+            cursor.execute("SELECT email FROM users WHERE data_principal_id = ? LIMIT 1;", (req["data_principal_id"],))
+            u_row2 = cursor.fetchone()
+            if u_row2 and u_row2["email"]:
+                principal_email = u_row2["email"]
+        if not principal_email and req.get("email_snapshot_id"):
+            cursor.execute("SELECT to_address FROM email_snapshots WHERE id = ? LIMIT 1;", (req["email_snapshot_id"],))
+            es_row2 = cursor.fetchone()
+            if es_row2 and es_row2["to_address"]:
+                principal_email = es_row2["to_address"]
 
         consent_record = {
             "consentId": consent_id,
@@ -1828,6 +2404,57 @@ def record_consent_decision(
             "receiptHash": receipt_hash,
             "customNote": payload.remark
         }
+
+        # ── DISPATCH CONFIRMATION EMAIL TO DATA PRINCIPAL ─────────────
+        confirmation_email_res = None
+        if principal_email:
+            app_base = get_hosted_base_url(request)
+            dashboard_link = f"{app_base}/?tab=consents"
+            try:
+                confirmation_email_res = send_consent_confirmation_email(
+                    to_email=principal_email,
+                    to_name=principal_name,
+                    fiduciary_name=req["fiduciary_name"],
+                    fiduciary_category=req.get("fiduciary_category") or "Corporate Fiduciary",
+                    purpose=req["purpose"],
+                    notice_id=req["notice_id"],
+                    consent_id=consent_id,
+                    granted_attributes=readable_granted,
+                    denied_attributes=readable_denied,
+                    granted_on=now,
+                    expires_on=expiry,
+                    receipt_hash=receipt_hash,
+                    dpo_email=req.get("dpo_email") or "",
+                    data_region=req.get("data_region") or "India",
+                    dashboard_link=dashboard_link,
+                )
+                logger.info(
+                    "[CONSENT] Confirmation email sent to %s for consent %s (Success: %s)",
+                    principal_email, consent_id, confirmation_email_res.get("success")
+                )
+            except Exception as e:
+                logger.error("[CONSENT] Failed to send confirmation email to %s: %s", principal_email, str(e))
+                confirmation_email_res = {"success": False, "message": str(e), "dev_mode": False}
+
+            if confirmation_email_res:
+                cursor.execute("""
+                INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (
+                    f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}",
+                    req["id"],
+                    consent_id,
+                    req["data_principal_id"],
+                    "CONFIRMATION_EMAIL_SENT",
+                    req["fiduciary_name"],
+                    req["notice_id"],
+                    f"Confirmation receipt email dispatched to {principal_email}. Attributes granted: {len(readable_granted)}.",
+                    "103.21.124.88",
+                    now,
+                    "SUCCESS" if confirmation_email_res.get("success") else "FAILED"
+                ))
+    else:
+        confirmation_email_res = None
 
     audit_id = f"AUD-{int(datetime.utcnow().timestamp() * 1000)}-{random.randint(1000, 9999)}"
     audit_action = "CONSENT_GRANTED" if payload.decision == "GRANTED" else "CONSENT_DENIED"
@@ -1925,7 +2552,8 @@ def record_consent_decision(
     return {
         "success": True,
         "message": f"Consent decision {payload.decision} recorded successfully.",
-        "consent": consent_record
+        "consent": consent_record,
+        "confirmation_email": confirmation_email_res if payload.decision == "GRANTED" else None
     }
 
 
@@ -2033,12 +2661,20 @@ def list_consents(current_user: dict = Depends(get_current_user)):
         else:
             cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
     rows = cursor.fetchall()
+    cursor.execute("SELECT id, name, email, roll_no FROM data_principals;")
+    dp_map = {row["id"]: dict(row) for row in cursor.fetchall()}
     conn.close()
 
     results = []
     for r in rows:
         d = dict(r)
         d["consentId"] = d.get("consent_id")
+        dp_info = dp_map.get(d.get("data_principal_id"), {})
+        d["dataPrincipal"] = dp_info
+        d["principalName"] = dp_info.get("name") or "Data Principal"
+        d["principalEmail"] = dp_info.get("email") or ""
+        d["rollNo"] = dp_info.get("roll_no", "")
+        d["roll_no"] = dp_info.get("roll_no", "")
         # Safe JSON parse for granted_attributes
         if isinstance(d.get("granted_attributes"), str):
             try:
@@ -2679,4 +3315,5 @@ if __name__ == "__main__":
     print("DP Consent Manager Single-Port React + FastAPI Server")
     print("Serving UI & REST API Base: http://localhost:8000")
     print("====================================================")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, app_dir=backend_dir)

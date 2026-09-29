@@ -22,7 +22,7 @@ export const Sidebar = ({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) 
     myPendingRequests 
   } = useConsent();
 
-  const { isDataPrincipal, isDataFiduciary } = useAuth();
+  const { isDataPrincipal, isDataFiduciary, isSuperAdmin } = useAuth();
 
   const activeCount = activeConsents.filter(c => c.status === 'ACTIVE').length;
   const pendingCount = myPendingRequests?.length || 0;
@@ -34,7 +34,14 @@ export const Sidebar = ({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) 
     }
   };
 
-  const navItems = isDataPrincipal ? [
+  const navItems = isSuperAdmin ? [
+    {
+      id: 'superadmin-fiduciaries',
+      label: 'Fiduciaries Registry',
+      icon: Building2,
+      badge: null
+    }
+  ] : isDataPrincipal ? [
     {
       id: 'dashboard',
       label: 'Dashboard',
@@ -97,7 +104,7 @@ export const Sidebar = ({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) 
         {/* Mobile Close Drawer Button */}
         {mobileOpen && (
           <button 
-            type="button"
+            type="button" 
             className="sidebar-mobile-close-btn"
             onClick={() => setMobileOpen(false)}
             aria-label="Close Navigation Drawer"
@@ -110,13 +117,13 @@ export const Sidebar = ({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) 
       {/* Navigation Menu */}
       <nav className="sidebar-nav" aria-label="Main Navigation">
         <div className="sidebar-nav-section-title">
-          {!collapsed && <span>{isDataFiduciary ? 'FIDUCIARY OPERATIONS' : 'NAVIGATION'}</span>}
+          {!collapsed && <span>{isSuperAdmin ? 'SUPER ADMIN CONSOLE' : isDataFiduciary ? 'FIDUCIARY OPERATIONS' : 'NAVIGATION'}</span>}
         </div>
 
         <div className="sidebar-nav-list">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = isDataFiduciary ? true : activeTab === item.id;
+            const isActive = isSuperAdmin || isDataFiduciary ? true : activeTab === item.id;
 
             return (
               <button

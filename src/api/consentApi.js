@@ -553,6 +553,41 @@ export const consentApi = {
       throw new Error(data.detail || 'Failed to resend consent email.');
     }
     return data;
+  },
+
+  // ── SUPER ADMIN DATA FIDUCIARY GOVERNANCE ─────────────────────────────
+
+  /**
+   * Fetch all registered Data Fiduciaries
+   * GET /api/admin/fiduciaries
+   */
+  async fetchFiduciaries() {
+    try {
+      const response = await authFetch(`${API_BASE_URL}/admin/fiduciaries`);
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e) {
+      console.warn('Fiduciaries fetch failed:', e);
+    }
+    return [];
+  },
+
+  /**
+   * Register a new Data Fiduciary
+   * POST /api/admin/fiduciaries
+   */
+  async createFiduciary(payload) {
+    const response = await authFetch(`${API_BASE_URL}/admin/fiduciaries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to register Data Fiduciary.');
+    }
+    return data;
   }
 };
 

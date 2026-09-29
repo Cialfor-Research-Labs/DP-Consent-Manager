@@ -80,7 +80,10 @@ from database import (
     create_password_reset,
     get_valid_password_reset,
     mark_password_reset_used,
-    update_user_password
+    update_user_password,
+    get_all_data_fiduciaries,
+    get_data_fiduciary_by_name,
+    create_data_fiduciary
 )
 from auth import (
     hash_password,
@@ -109,7 +112,9 @@ from models import (
     UserOut,
     ForgotPasswordPayload,
     VerifyResetOtpPayload,
-    ResetPasswordPayload
+    ResetPasswordPayload,
+    FiduciaryCreatePayload,
+    FiduciaryOut
 )
 
 # Initialize database tables and seed records
@@ -1136,6 +1141,134 @@ def provision_fiduciary_user(
     }
 
 
+# ── SUPER ADMIN DATA FIDUCIARIES REGISTRY & PROVISIONING ──────────────────────
+
+@app.get("/api/admin/fiduciaries")
+@app.get("/api/fiduciaries")
+def list_fiduciaries_endpoint(current_user: dict = Depends(get_current_user)):
+    """
+    List all registered Data Fiduciaries in the DPDP Consent Management System.
+    Super Admin (Compliance Officer) or authenticated entities can discover registered organizations.
+    """
+    return get_all_data_fiduciaries()
+
+
+@app.post("/api/admin/fiduciaries")
+@app.post("/api/fiduciaries")
+def create_fiduciary_endpoint(
+    payload: FiduciaryCreatePayload,
+    current_user: dict = Depends(require_role(["SUPER_ADMIN", "ADMIN", "COMPLIANCE_OFFICER"]))
+):
+    """
+    Super Admin (Compliance Officer) endpoint to register a new Data Fiduciary.
+    Validates institutional parameters (entity name, regulatory domain, contact email, DPO details).
+    Provisions a Data Fiduciary administrative login user account with role DATA_FIDUCIARY.
+    """
+    name_clean = (payload.name or "").strip()
+    if not name_clean:
+        raise HTTPException(status_code=400, detail="Data Fiduciary entity name is required.")
+    
+    domain_clean = (payload.domain or "").strip()
+    if not domain_clean:
+        raise HTTPException(status_code=400, detail="Regulatory domain is required (e.g. Education, Banking, Healthcare, FinTech).")
+
+    if not payload.contact_email or not payload.contact_email.strip():
+        raise HTTPException(status_code=400, detail="Official contact email is required.")
+
+    norm_email = payload.contact_email.strip().lower()
+    if not re.match(EMAIL_REGEX, norm_email):
+        raise HTTPException(status_code=422, detail="Invalid contact email address format.")
+
+    # Duplicate check for fiduciary name
+    existing = get_data_fiduciary_by_name(name_clean)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"A Data Fiduciary named '{name_clean}' is already registered.")
+
+    # Category and Logo metadata auto-resolution
+    category = payload.category.strip() if payload.category else None
+    logo = payload.logo.strip() if payload.logo else None
+    if not category or not logo:
+        auto_cat, auto_logo = get_fiduciary_metadata(name_clean, domain_clean)
+        category = category or auto_cat
+        logo = logo or auto_logo
+
+    dpo_name = payload.dpo_name.strip() if payload.dpo_name else "Data Protection Officer"
+    dpo_email = payload.dpo_email.strip().lower() if payload.dpo_email else f"dpo@{norm_email.split('@')[-1]}"
+
+    # 1. Create Data Fiduciary record in data_fiduciaries table
+    created_fiduciary = create_data_fiduciary(
+        name=name_clean,
+        domain=domain_clean,
+        category=category,
+        logo=logo,
+        contact_email=norm_email,
+        dpo_name=dpo_name,
+        dpo_email=dpo_email
+    )
+
+    # 2. Provision Data Fiduciary admin user account in users table
+    admin_info = None
+    existing_user = get_user_by_email(norm_email)
+    admin_pwd = payload.admin_password if payload.admin_password else "Password@123"
+    if not existing_user:
+        admin_name = payload.admin_name.strip() if payload.admin_name else f"{name_clean} Administrator"
+        pw_hash = hash_password(admin_pwd)
+        user_row = create_user_account(
+            name=admin_name,
+            email=norm_email,
+            password_hash=pw_hash,
+            role="DATA_FIDUCIARY",
+            data_principal_id=None,
+            fiduciary_name=name_clean
+        )
+        admin_info = {
+            "name": admin_name,
+            "email": norm_email,
+            "role": "DATA_FIDUCIARY",
+            "initial_password": admin_pwd
+        }
+    else:
+        admin_info = {
+            "name": existing_user.get("name"),
+            "email": existing_user.get("email"),
+            "role": existing_user.get("role"),
+            "note": "Existing user account linked as fiduciary administrator"
+        }
+
+    # 3. Create Audit Event for fiduciary provisioning
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        now_str = datetime.utcnow().isoformat() + "Z"
+        cursor.execute("""
+        INSERT INTO audit_events (id, request_id, consent_id, data_principal_id, action, fiduciary, notice_id, details, ip_address, timestamp, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (
+            f"AUD-{random.randint(100, 999)}",
+            "SYS-FID-REG",
+            "N/A",
+            current_user.get("id", "SUPER_ADMIN"),
+            "FIDUCIARY_REGISTERED",
+            name_clean,
+            "N/A",
+            f"Super Admin registered new Data Fiduciary '{name_clean}' in domain '{domain_clean}'.",
+            "103.21.124.88",
+            now_str,
+            "SUCCESS"
+        ))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "message": f"Data Fiduciary '{name_clean}' successfully registered under DPDP Act 2023.",
+        "fiduciary": created_fiduciary,
+        "admin_account": admin_info
+    }
+
+
 # ── GMAIL SYNC & INGESTION (SERVER-TO-SERVER AUTHENTICATION) ──────────────────
 
 def verify_webhook_secret(
@@ -1412,6 +1545,18 @@ def create_consent_request(
     request: Request = None,
     current_user: dict = Depends(require_role(["DATA_FIDUCIARY", "ADMIN"]))
 ):
+    role = (current_user.get("role") or "").upper()
+    if role in ["SUPER_ADMIN", "COMPLIANCE_OFFICER"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super Admin cannot dispatch consent requests. Super Admin role is restricted to fiduciary registration and governance."
+        )
+
+    # Enforce fiduciary isolation: A data fiduciary can only create notices under their own registered entity
+    fiduciary_name = payload.fiduciary_name
+    if role == "DATA_FIDUCIARY" and current_user.get("fiduciary_name"):
+        fiduciary_name = current_user["fiduciary_name"]
+
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1434,7 +1579,7 @@ def create_consent_request(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?);
     """, (
         snapshot_id,
-        f"{payload.fiduciary_name} <{payload.fiduciary_email}>",
+        f"{fiduciary_name} <{payload.fiduciary_email}>",
         f"{dp_name} <{dp_email}>",
         payload.email_subject,
         datetime.utcnow().strftime("%A, %B %d, %Y"),
@@ -1458,7 +1603,7 @@ def create_consent_request(
         notice_id,
         dp_id,
         snapshot_id,
-        payload.fiduciary_name,
+        fiduciary_name,
         payload.fiduciary_category,
         payload.fiduciary_logo,
         payload.fiduciary_email,
@@ -1513,6 +1658,18 @@ def create_bulk_consent_requests(
     Bulk/Batch Consent Request Dispatcher for Institutions, Universities, Colleges & Enterprises.
     Dispatches cryptographic DPDP consent notices to a list of recipients (e.g. 1000 CS students).
     """
+    role = (current_user.get("role") or "").upper()
+    if role in ["SUPER_ADMIN", "COMPLIANCE_OFFICER"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super Admin cannot dispatch bulk consent requests. Super Admin role is restricted to fiduciary registration and governance."
+        )
+
+    # Enforce fiduciary isolation
+    fiduciary_name = payload.fiduciary_name
+    if role == "DATA_FIDUCIARY" and current_user.get("fiduciary_name"):
+        fiduciary_name = current_user["fiduciary_name"]
+
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1535,7 +1692,7 @@ def create_bulk_consent_requests(
     default_subject_template = payload.email_subject or f"Statutory DPDP Notice: {payload.purpose}"
     default_body_template = payload.email_body_template or (
         f"Dear {{{{name}}}},\n\n"
-        f"{payload.fiduciary_name} requests your digital consent under the DPDP Act 2023 for: {payload.purpose}."
+        f"{fiduciary_name} requests your digital consent under the DPDP Act 2023 for: {payload.purpose}."
     )
 
     for idx, r in enumerate(recipients):
@@ -1992,14 +2149,23 @@ def list_consent_requests(
     status: Optional[str] = Query(None, description="Filter by status"),
     current_user: dict = Depends(get_current_user)
 ):
+    role = (current_user.get("role") or "").upper()
+    if role in ["SUPER_ADMIN", "COMPLIANCE_OFFICER"]:
+        # Super Admin cannot view individual data fiduciary consent requests
+        return []
+
     conn = get_db()
     cursor = conn.cursor()
-    if current_user.get("role") == "DATA_PRINCIPAL":
+
+    if role == "DATA_PRINCIPAL":
         dp_id = current_user.get("dp_id")
         if not dp_id:
             _, norm_user_email = normalize_email_address(current_user.get("email", ""))
             if norm_user_email:
                 dp_id = link_or_create_data_principal(norm_user_email, current_user.get("name", "Data Principal"))
+        if not dp_id:
+            conn.close()
+            return []
         if status:
             cursor.execute(
                 "SELECT * FROM consent_requests WHERE data_principal_id = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
@@ -2007,24 +2173,22 @@ def list_consent_requests(
             )
         else:
             cursor.execute("SELECT * FROM consent_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
-    else:
+    elif role == "DATA_FIDUCIARY":
         fiduciary_name = current_user.get("fiduciary_name")
-        if fiduciary_name:
-            if status:
-                cursor.execute(
-                    "SELECT * FROM consent_requests WHERE fiduciary_name = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
-                    (fiduciary_name, status.strip().upper())
-                )
-            else:
-                cursor.execute("SELECT * FROM consent_requests WHERE fiduciary_name = ? ORDER BY created_at DESC;", (fiduciary_name,))
+        if not fiduciary_name:
+            conn.close()
+            return []
+        if status:
+            cursor.execute(
+                "SELECT * FROM consent_requests WHERE fiduciary_name = ? AND UPPER(status) = ? ORDER BY created_at DESC;",
+                (fiduciary_name, status.strip().upper())
+            )
         else:
-            if status:
-                cursor.execute(
-                    "SELECT * FROM consent_requests WHERE UPPER(status) = ? ORDER BY created_at DESC;",
-                    (status.strip().upper(),)
-                )
-            else:
-                cursor.execute("SELECT * FROM consent_requests ORDER BY created_at DESC;")
+            cursor.execute("SELECT * FROM consent_requests WHERE fiduciary_name = ? ORDER BY created_at DESC;", (fiduciary_name,))
+    else:
+        conn.close()
+        return []
+
     rows = cursor.fetchall()
     results = [strip_admin_fields(hydrate_request(r, conn)) for r in rows]
     conn.close()
@@ -2649,17 +2813,30 @@ def trigger_dispatch_immediate(
 
 @app.get("/api/consents")
 def list_consents(current_user: dict = Depends(get_current_user)):
+    role = (current_user.get("role") or "").upper()
+    if role in ["SUPER_ADMIN", "COMPLIANCE_OFFICER"]:
+        # Super Admin cannot view active consents
+        return []
+
     conn = get_db()
     cursor = conn.cursor()
-    if current_user.get("role") == "DATA_PRINCIPAL":
+
+    if role == "DATA_PRINCIPAL":
         dp_id = current_user.get("dp_id")
+        if not dp_id:
+            conn.close()
+            return []
         cursor.execute("SELECT * FROM consents WHERE data_principal_id = ? ORDER BY granted_on DESC;", (dp_id,))
-    else:
+    elif role == "DATA_FIDUCIARY":
         fiduciary_name = current_user.get("fiduciary_name")
-        if fiduciary_name:
-            cursor.execute("SELECT * FROM consents WHERE fiduciary_name = ? ORDER BY granted_on DESC;", (fiduciary_name,))
-        else:
-            cursor.execute("SELECT * FROM consents ORDER BY granted_on DESC;")
+        if not fiduciary_name:
+            conn.close()
+            return []
+        cursor.execute("SELECT * FROM consents WHERE fiduciary_name = ? ORDER BY granted_on DESC;", (fiduciary_name,))
+    else:
+        conn.close()
+        return []
+
     rows = cursor.fetchall()
     cursor.execute("SELECT id, name, email, roll_no FROM data_principals;")
     dp_map = {row["id"]: dict(row) for row in cursor.fetchall()}
@@ -2832,13 +3009,30 @@ async def revoke_consent(
 @app.get("/api/audit-logs")
 @app.get("/api/audit")
 def list_audit_logs(current_user: dict = Depends(get_current_user)):
+    role = (current_user.get("role") or "").upper()
+    if role in ["SUPER_ADMIN", "COMPLIANCE_OFFICER"]:
+        # Super Admin cannot view individual data fiduciary audit logs
+        return []
+
     conn = get_db()
     cursor = conn.cursor()
-    if current_user.get("role") == "DATA_PRINCIPAL":
+
+    if role == "DATA_PRINCIPAL":
         dp_id = current_user.get("dp_id")
+        if not dp_id:
+            conn.close()
+            return []
         cursor.execute("SELECT * FROM audit_events WHERE data_principal_id = ? ORDER BY timestamp DESC;", (dp_id,))
+    elif role == "DATA_FIDUCIARY":
+        fiduciary_name = current_user.get("fiduciary_name")
+        if not fiduciary_name:
+            conn.close()
+            return []
+        cursor.execute("SELECT * FROM audit_events WHERE fiduciary = ? ORDER BY timestamp DESC;", (fiduciary_name,))
     else:
-        cursor.execute("SELECT * FROM audit_events ORDER BY timestamp DESC;")
+        conn.close()
+        return []
+
     rows = cursor.fetchall()
     conn.close()
 
@@ -2910,17 +3104,30 @@ def create_dsr_request(
 
 @app.get("/api/data-rights")
 def list_dsr_requests(current_user: dict = Depends(get_current_user)):
+    role = (current_user.get("role") or "").upper()
+    if role in ["SUPER_ADMIN", "COMPLIANCE_OFFICER"]:
+        # Super Admin cannot view individual data fiduciary DSR requests
+        return []
+
     conn = get_db()
     cursor = conn.cursor()
-    if current_user.get("role") == "DATA_PRINCIPAL":
+
+    if role == "DATA_PRINCIPAL":
         dp_id = current_user.get("dp_id")
+        if not dp_id:
+            conn.close()
+            return []
         cursor.execute("SELECT * FROM data_rights_requests WHERE data_principal_id = ? ORDER BY created_at DESC;", (dp_id,))
-    else:
+    elif role == "DATA_FIDUCIARY":
         fiduciary_name = current_user.get("fiduciary_name")
-        if fiduciary_name:
-            cursor.execute("SELECT * FROM data_rights_requests WHERE target_fiduciary = ? ORDER BY created_at DESC;", (fiduciary_name,))
-        else:
-            cursor.execute("SELECT * FROM data_rights_requests ORDER BY created_at DESC;")
+        if not fiduciary_name:
+            conn.close()
+            return []
+        cursor.execute("SELECT * FROM data_rights_requests WHERE target_fiduciary = ? ORDER BY created_at DESC;", (fiduciary_name,))
+    else:
+        conn.close()
+        return []
+
     rows = cursor.fetchall()
     conn.close()
 

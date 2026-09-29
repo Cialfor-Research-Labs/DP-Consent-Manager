@@ -6,6 +6,7 @@ import { Header } from './components/Header';
 import { AuthView } from './components/AuthView';
 import { ConsentLandingView } from './components/ConsentLandingView';
 import { FiduciaryDashboardView } from './components/FiduciaryDashboardView';
+import { SuperAdminDashboardView } from './components/SuperAdminDashboardView';
 import { EmailSimulatorView } from './components/EmailSimulatorView';
 import { ConsentDecisionHub } from './components/ConsentDecisionHub';
 import { PrincipalDashboardView } from './components/PrincipalDashboardView';
@@ -35,7 +36,7 @@ function extractConsentToken() {
 }
 
 const MainAppContent = () => {
-  const { isAuthenticated, loading: authLoading, isDataFiduciary } = useAuth();
+  const { isAuthenticated, loading: authLoading, isDataFiduciary, isSuperAdmin } = useAuth();
   const { activeTab, toastMessage, loading, apiError, setActiveTab, openRequestReview } = useConsent();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -190,7 +191,9 @@ const MainAppContent = () => {
         )}
 
         <main className="main-wrapper">
-          {isDataFiduciary ? (
+          {isSuperAdmin ? (
+            <SuperAdminDashboardView />
+          ) : isDataFiduciary ? (
             <FiduciaryDashboardView />
           ) : (
             <>
@@ -205,7 +208,7 @@ const MainAppContent = () => {
           )}
         </main>
 
-        {!isDataFiduciary && (
+        {!isDataFiduciary && !isSuperAdmin && (
           <>
             <ConsentReceiptModal />
             <GrievanceModal />

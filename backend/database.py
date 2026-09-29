@@ -300,6 +300,40 @@ def init_db():
     except Exception:
         pass
 
+    # 12. Data Fiduciaries Table for Super Admin Management & Global Registry
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS data_fiduciaries (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        domain TEXT NOT NULL,
+        category TEXT,
+        logo TEXT DEFAULT '🏢',
+        contact_email TEXT NOT NULL,
+        dpo_name TEXT,
+        dpo_email TEXT,
+        status TEXT DEFAULT 'ACTIVE',
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+    );
+    """)
+
+    # Seed default fiduciaries if data_fiduciaries table is empty
+    cursor.execute("SELECT COUNT(*) FROM data_fiduciaries;")
+    fid_count = cursor.fetchone()[0]
+    if fid_count == 0:
+        seed_data_fiduciaries(cursor)
+    else:
+        # Clean up any previously seeded mock/fake fiduciaries
+        try:
+            cursor.execute("""
+            DELETE FROM data_fiduciaries WHERE id IN (
+                'FID-2026-002', 'FID-2026-003', 'FID-2026-004', 'FID-2026-005',
+                'FID-2026-006', 'FID-2026-007', 'FID-2026-008', 'FID-2026-009'
+            );
+            """)
+        except Exception:
+            pass
+
     # Auto-add thread_id and message_id columns to existing tables if missing
     for tbl in ["consent_requests", "email_snapshots"]:
         try:
@@ -340,12 +374,32 @@ def init_db():
     user_count = cursor.fetchone()[0]
     if user_count == 0:
         seed_users(cursor)
+    else:
+        # Migration: Ensure Compliance Officer is strictly configured as SUPER_ADMIN
+        try:
+            cursor.execute("UPDATE users SET role = 'SUPER_ADMIN', fiduciary_name = NULL WHERE LOWER(email) = 'admin@cialfor.com';")
+        except Exception:
+            pass
 
     # Normalize existing Data Principal mappings for all requests and users
     sync_and_normalize_data_principals(cursor)
 
     conn.commit()
     conn.close()
+
+def seed_data_fiduciaries(cursor):
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    default_fiduciaries = [
+        ("FID-2026-001", "Cialfor Research Labs Private Limited", "Compliance & Research", "Compliance & Tech Research", "🛡️", "compliance@cialfor.com", "Prerna Pandey", "dpo@cialfor.com", "ACTIVE", now_iso, now_iso),
+    ]
+    for fid in default_fiduciaries:
+        try:
+            cursor.execute("""
+            INSERT OR IGNORE INTO data_fiduciaries (id, name, domain, category, logo, contact_email, dpo_name, dpo_email, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, fid)
+        except Exception:
+            pass
 
 def seed_users(cursor):
     import bcrypt
@@ -373,8 +427,52 @@ def seed_users(cursor):
     """, [
         ("USR-DEMO-001", "rahul.verma@delhiuniv.ac.in", "Rahul Verma", dp_hash, "DATA_PRINCIPAL", dp_rahul_id, None, now_iso, now_iso),
         ("USR-DEMO-002", "pandeyprerna1407@gmail.com", "Prerna Pandey", dp_hash, "DATA_FIDUCIARY", None, "Cialfor Research Labs Private Limited", now_iso, now_iso),
-        ("USR-DEMO-003", "admin@cialfor.com", "Compliance Officer", admin_hash, "DATA_FIDUCIARY", None, "Cialfor Research Labs Private Limited", now_iso, now_iso),
+        ("USR-DEMO-003", "admin@cialfor.com", "Compliance Officer", admin_hash, "SUPER_ADMIN", None, None, now_iso, now_iso),
     ])
+
+def get_all_data_fiduciaries():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM data_fiduciaries ORDER BY created_at ASC;")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_data_fiduciary_by_name(name: str):
+    if not name:
+        return None
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM data_fiduciaries WHERE LOWER(name) = LOWER(?);", (name.strip(),))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def create_data_fiduciary(name: str, domain: str, category: str = None, logo: str = "🏢", contact_email: str = "", dpo_name: str = "Data Protection Officer", dpo_email: str = None):
+    import uuid
+    conn = get_db()
+    cursor = conn.cursor()
+    fid_id = f"FID-2026-{uuid.uuid4().hex[:6].upper()}"
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    cursor.execute("""
+    INSERT INTO data_fiduciaries (id, name, domain, category, logo, contact_email, dpo_name, dpo_email, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?);
+    """, (fid_id, name.strip(), domain.strip(), category or f"{domain} Services", logo or "🏢", contact_email.strip().lower(), dpo_name.strip() if dpo_name else None, dpo_email.strip().lower() if dpo_email else None, now_iso, now_iso))
+    conn.commit()
+    conn.close()
+    return {
+        "id": fid_id,
+        "name": name.strip(),
+        "domain": domain.strip(),
+        "category": category or f"{domain} Services",
+        "logo": logo or "🏢",
+        "contact_email": contact_email.strip().lower(),
+        "dpo_name": dpo_name.strip() if dpo_name else None,
+        "dpo_email": dpo_email.strip().lower() if dpo_email else None,
+        "status": "ACTIVE",
+        "created_at": now_iso,
+        "updated_at": now_iso
+    }
 
 def get_user_by_email(email: str):
     if not email:

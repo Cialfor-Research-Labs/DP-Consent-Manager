@@ -530,7 +530,7 @@ export const AuthView = ({ consentToken = null }) => {
                     style={{ background: 'var(--accent-soft)', borderColor: 'var(--border-highlight)' }}
                   >
                     <div>
-                      <strong style={{ color: 'var(--accent-primary)' }}>Compliance Officer</strong> (Data Fiduciary / Admin)
+                      <strong style={{ color: 'var(--accent-primary)' }}>Compliance Officer</strong> (Super Admin • Fiduciary Registry)
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>admin@cialfor.com</div>
                     </div>
                     <span style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 700 }}>Fill &rarr;</span>

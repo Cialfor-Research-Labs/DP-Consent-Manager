@@ -26,7 +26,7 @@ export const Header = ({ sidebarCollapsed, toggleSidebarCollapse, setMobileSideb
     toggleTheme 
   } = useConsent();
 
-  const { user, isDataPrincipal, isDataFiduciary, logout } = useAuth();
+  const { user, isDataPrincipal, isDataFiduciary, isSuperAdmin, logout } = useAuth();
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -48,6 +48,12 @@ export const Header = ({ sidebarCollapsed, toggleSidebarCollapse, setMobileSideb
 
   // Derive human-readable page title and breadcrumb
   const getPageMeta = () => {
+    if (isSuperAdmin) {
+      return {
+        section: 'Super Admin Portal',
+        title: 'Data Fiduciaries Registry'
+      };
+    }
     if (isDataFiduciary) {
       return {
         section: 'Enterprise Fiduciary',
@@ -181,8 +187,8 @@ export const Header = ({ sidebarCollapsed, toggleSidebarCollapse, setMobileSideb
                     <span className="dropdown-name">{displayName}</span>
                     <span className="dropdown-email" title={displayEmail}>{displayEmail}</span>
                     <div className="dropdown-badges-row">
-                      <span className={`role-badge ${isDataFiduciary ? 'role-fiduciary' : 'role-principal'}`}>
-                        {isDataFiduciary ? 'DATA FIDUCIARY' : 'DATA PRINCIPAL'}
+                      <span className={`role-badge ${isSuperAdmin ? 'role-superadmin' : isDataFiduciary ? 'role-fiduciary' : 'role-principal'}`}>
+                        {isSuperAdmin ? 'SUPER ADMIN (COMPLIANCE OFFICER)' : isDataFiduciary ? 'DATA FIDUCIARY' : 'DATA PRINCIPAL'}
                       </span>
                       {user?.data_principal_id && (
                         <span className="id-badge">{user.data_principal_id}</span>

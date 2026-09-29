@@ -143,3 +143,28 @@ class ResetPasswordPayload(BaseModel):
     reset_token: Optional[str] = None
     new_password: str
 
+class FiduciaryCreatePayload(BaseModel):
+    name: str
+    domain: str
+    category: Optional[str] = None
+    logo: Optional[str] = "🏢"
+    contact_email: str
+    dpo_name: Optional[str] = "Data Protection Officer"
+    dpo_email: Optional[str] = None
+    admin_name: Optional[str] = None
+    admin_password: Optional[str] = None
+
+class FiduciaryOut(BaseModel):
+    id: str
+    name: str
+    domain: str
+    category: Optional[str] = None
+    logo: Optional[str] = "🏢"
+    contact_email: str
+    dpo_name: Optional[str] = None
+    dpo_email: Optional[str] = None
+    status: Optional[str] = "ACTIVE"
+    created_at: Optional[str] = None
+    admin_account: Optional[str] = None
+
+

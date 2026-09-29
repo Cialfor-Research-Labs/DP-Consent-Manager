@@ -1247,9 +1247,12 @@ export const BulkNoticeDispatcher = ({ user, onDispatched, onSwitchTab }) => {
             <input
               type="text"
               value={fiduciaryName}
-              onChange={(e) => setFiduciaryName(e.target.value)}
+              onChange={(e) => !user?.fiduciary_name && setFiduciaryName(e.target.value)}
+              disabled={Boolean(user?.fiduciary_name)}
               placeholder="e.g. Delhi Institute of Technology - Department of Computer Science"
               className="form-input"
+              style={user?.fiduciary_name ? { opacity: 0.85, cursor: 'not-allowed', background: 'var(--bg-card-subtle)' } : {}}
+              title={user?.fiduciary_name ? "Locked to your authenticated Data Fiduciary organization profile" : undefined}
             />
           </div>
 
